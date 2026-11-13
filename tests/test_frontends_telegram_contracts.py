@@ -35,6 +35,6 @@ def test_telegram_chat_view_implements_chat_view() -> None:
 async def test_telegram_progress_handle_implements_progress_handle() -> None:
     view = TelegramChatView(_FakeSender(), 1)
 
-    handle = await view.start_progress("working")
+    handle = await view.start_progress()
 
     assert isinstance(handle, ProgressHandle)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -39,7 +40,11 @@ from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
 from flet_app.screens.conversations_screen import ConversationsScreen  # noqa: E402
 from services.agent_sessions import ConversationSummary, Message  # noqa: E402
 from services.composition import build_prompt_stack  # noqa: E402
-from services.frontend_gate import AllowAllGate  # noqa: E402
+from services.frontend_gate import (  # noqa: E402
+    AllowAllGate,
+    authorize_request,
+    finish_request,
+)
 from services.prompt_service import PromptAlreadyRunningError  # noqa: E402
 from services.server_lifecycle import (  # noqa: E402
     WarmUpLifecycle,
@@ -173,29 +178,34 @@ async def main(page: ft.Page) -> None:
         if not text:
             return
 
-        if not gate.is_allowed(CONVERSATION_ID):
+        # Same shared helper as ``@authorized``: request id + entry log +
+        # gate policy (the Flet gate is AllowAllGate: physical access).
+        if not authorize_request(gate, CONVERSATION_ID, "flet_on_send"):
             await view.send("⛔ No autorizado.")
             return
 
-        chat.composer.field.value = ""
-        chat.composer.set_busy(True)
-        page.update()
-
-        await view.send(text, role="user")
-
+        started = time.monotonic()
         try:
-            await core.prompt_service.execute(
-                conversation_id=CONVERSATION_ID,
-                prompt_text=text,
-                view=view,
-            )
-        except PromptAlreadyRunningError:
-            await view.send("⏳ Ya hay un prompt en ejecución.")
-        except Exception as exc:
-            await view.send(f"❌ Error inesperado: `{exc}`")
+            chat.composer.field.value = ""
+            chat.composer.set_busy(True)
+            page.update()
+
+            await view.send(text, role="user")
+
+            try:
+                await core.prompt_service.execute(
+                    conversation_id=CONVERSATION_ID,
+                    prompt_text=text,
+                    view=view,
+                )
+            except PromptAlreadyRunningError:
+                await view.send("⏳ Ya hay un prompt en ejecución.")
+            except Exception as exc:
+                await view.send(f"❌ Error inesperado: `{exc}`")
         finally:
             chat.composer.set_busy(False)
             page.update()
+            finish_request("flet_on_send", CONVERSATION_ID, started)
 
     chat.composer.bind(on_send)
     page.add(host.control)

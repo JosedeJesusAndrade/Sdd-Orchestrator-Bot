@@ -1,9 +1,14 @@
 """Handler package: shared authorization decorator with structured logging.
 
 This module now contains:
-  - `authorize(chat_id)` — pure check, no I/O
-  - `@authorized` — decorator that gates handler execution and logs every
-    call with structured events (handler_entry, handler_exit, unauthorized)
+  - `@authorized` — decorator that resolves the frontend gate from
+    ``bot_data``, delegates the allow-list check to ``is_allowed`` and logs
+    every call with structured events (handler_entry, handler_exit,
+    unauthorized)
+
+The gate itself is ``TelegramGate`` (backed by ``ALLOWED_CHAT_IDS``); the
+request id and the events come from ``services.frontend_gate``, the SAME path
+the Flet entry point uses.
 
 Session state has been moved to services/session_store.py (SessionStore).
 Process tracking has been moved to services/prompt_service.py (PromptService).
@@ -17,38 +22,43 @@ from typing import Any, Concatenate, ParamSpec, cast
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from frontends.telegram.keys import telegram_key
 from handlers._guards import require_chat
-from telegram_config import ALLOWED_CHAT_IDS
-from utils.logging import get_module_logger, mask_chat_id, new_request_id
+from services.frontend_gate import FrontendGate, authorize_request, finish_request
+from telegram_config import GATE_KEY
+from utils.logging import get_module_logger, new_request_id
 
 logger = get_module_logger(__name__)
 
 P = ParamSpec("P")
 
 
-def authorize(chat_id: int) -> bool:
-    """Return True if chat_id is in the allowed list."""
-    return chat_id in ALLOWED_CHAT_IDS
+def _resolve_gate(context: ContextTypes.DEFAULT_TYPE) -> FrontendGate | None:
+    """Return the gate stored by the composition root, if it is valid."""
+    gate = context.application.bot_data.get(GATE_KEY)
+    if not isinstance(gate, FrontendGate):
+        return None
+    return gate
 
 
 def authorized(
     handler: Callable[Concatenate[Update, ContextTypes.DEFAULT_TYPE, P], Awaitable[None]],
 ) -> Callable[Concatenate[Update, ContextTypes.DEFAULT_TYPE, P], Coroutine[Any, Any, None]]:
-    """Decorator: only allow authorized chat_ids to execute the handler.
+    """Decorator: only allow conversations the frontend gate permits.
 
     Responsibilities (in order):
-      1. Generate a fresh request_id (visible as [req=...] in file logs)
-      2. Log handler_entry DEBUG event with handler name + masked chat_id
-      3. Extract the Update from positional/keyword args
-      4. Authorize the chat_id — log `unauthorized` WARNING if rejected
-      5. Time the handler execution
-      6. Log handler_exit DEBUG event with duration_ms
-      7. Return the handler's result
+      1. Extract the Update from positional/keyword args
+      2. Resolve the ``FrontendGate`` from ``bot_data[GATE_KEY]``
+      3. Mint the opaque ``telegram:{chat_id}`` key
+      4. Delegate to ``authorize_request`` (fresh request id + entry log +
+         allow-list check — one source of truth with the Flet path)
+      5. Time the handler execution and log ``handler_exit`` via
+         ``finish_request``
 
-    Event coverage (Phase 2 logging improvements):
+    Event coverage:
       - DEBUG event=handler_entry   at handler start
       - DEBUG event=handler_exit    at handler end (with duration_ms)
-      - WARNING event=unauthorized  if chat_id not in ALLOWED_CHAT_IDS
+      - WARNING event=unauthorized  if the gate denies the conversation
     """
 
     @functools.wraps(handler)
@@ -58,10 +68,10 @@ def authorized(
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> None:
-        # Fresh request_id for this invocation — visible in file logs as [req=...]
-        new_request_id()
-
         if update is None:
+            # No key exists to authorize, but keep a fresh request id so the
+            # diagnostic is correlated like every other handler invocation.
+            new_request_id()
             logger.error(
                 "Update missing in authorized handler",
                 extra={
@@ -71,43 +81,26 @@ def authorized(
             )
             return
 
-        chat_id = require_chat(update).id
-        masked_cid = mask_chat_id(chat_id)
-
-        logger.debug(
-            "Handler entry",
-            extra={
-                "event": "handler_entry",
-                "handler": handler.__name__,
-                "chat_id_masked": masked_cid,
-            },
-        )
-
-        if not authorize(chat_id):
-            logger.warning(
-                "Unauthorized access",
+        gate = _resolve_gate(context)
+        if gate is None:
+            logger.error(
+                "Frontend gate missing from bot_data",
                 extra={
-                    "event": "unauthorized",
+                    "event": "authorized_missing_gate",
                     "handler": handler.__name__,
-                    "chat_id_masked": masked_cid,
                 },
             )
+            return
+
+        conversation_id = telegram_key(require_chat(update).id)
+        if not authorize_request(gate, conversation_id, handler.__name__):
             return
 
         start = time.monotonic()
         try:
             return await handler(update, context, *args, **kwargs)
         finally:
-            elapsed_ms = round((time.monotonic() - start) * 1000, 2)
-            logger.debug(
-                "Handler exit",
-                extra={
-                    "event": "handler_exit",
-                    "handler": handler.__name__,
-                    "chat_id_masked": masked_cid,
-                    "duration_ms": elapsed_ms,
-                },
-            )
+            finish_request(handler.__name__, conversation_id, start)
 
     # ``functools.wraps`` wraps ``wrapper`` in ``functools._Wrapped``, which
     # mypy cannot reconcile with the Concatenate/ParamSpec return type; the

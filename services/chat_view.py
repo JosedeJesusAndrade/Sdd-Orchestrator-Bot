@@ -16,11 +16,15 @@ The progress handle is intentionally OPAQUE: the core only knows
 Contract:
     ChatView.source_label -> str
         Frontend identity prepended to the engine prompt (e.g. "📱 Telegram").
+    ChatView.strings -> CoreStrings
+        Frontend-owned UI copy. The core formats these templates but never
+        decides a single user-facing word or emoji (item 4).
     ChatView.send(text) -> bool
         Deliver a final message; True only if the WHOLE message reached the
         user (every fragment). Partial delivery is reported as False (F8).
-    ChatView.start_progress(text) -> ProgressHandle
-        Open an in-place status placeholder and return its handle.
+    ChatView.start_progress() -> ProgressHandle
+        Open an in-place status placeholder (the view picks its own text) and
+        return its handle.
 
 Future evolution (option b — NOT implemented): if a frontend needs to render
 "⚠️ Entregado parcialmente 4/5" it must know the counts, which a boolean
@@ -33,13 +37,44 @@ frontend actually needs per-fragment status; today the boolean is enough.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from services.conversation import ConversationKey
 
 # Re-exported for callers that think in terms of the ChatView seam; the
 # canonical definition (and helpers) live in ``services.conversation``.
-__all__ = ["ChatView", "ConversationKey", "ProgressHandle"]
+__all__ = ["ChatView", "ConversationKey", "CoreStrings", "ProgressHandle"]
+
+
+@dataclass(frozen=True)
+class CoreStrings:
+    """Frontend-owned UI copy that the core formats but never decides.
+
+    The core reads this frozen bundle from the active ``ChatView`` and only
+    substitutes data into the templates. The actual values live in each
+    frontend's strings module (built from ``locales``); ``PromptService``
+    contains no emoji or sentence literals.
+
+    Templates use ``str.format``:
+      - ``processing_elapsed``: ``{elapsed}``
+      - ``error``: ``{error}``
+      - ``error_code`` / ``error_code_no_output``: ``{code}``
+      - ``new_session``: ``{name}``
+    """
+
+    processing: str
+    processing_elapsed: str
+    cancelled: str
+    completed: str
+    completed_no_output: str
+    error: str
+    error_code: str
+    error_code_no_output: str
+    delivery_failed: str
+    permission_not_accepted: str
+    permission_not_accepted_notice: str
+    new_session: str
 
 
 @runtime_checkable
@@ -64,6 +99,7 @@ class ChatView(Protocol):
     """A frontend conversation surface."""
 
     source_label: str
+    strings: CoreStrings
 
     async def send(self, text: str) -> bool:
         """Deliver a fire-and-forget final message.
@@ -72,6 +108,9 @@ class ChatView(Protocol):
         """
         ...
 
-    async def start_progress(self, text: str) -> ProgressHandle:
-        """Open an in-place progress placeholder and return its handle."""
+    async def start_progress(self) -> ProgressHandle:
+        """Open an in-place progress placeholder and return its handle.
+
+        The view decides the placeholder text (``strings.processing``).
+        """
         ...

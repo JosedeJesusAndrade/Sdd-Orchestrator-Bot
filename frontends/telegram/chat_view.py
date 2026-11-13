@@ -13,6 +13,7 @@ from __future__ import annotations
 from frontends.telegram.bot_port import MessageInfo
 from frontends.telegram.formatting import split_message
 from frontends.telegram.message_sender import MessageSenderPort
+from frontends.telegram.strings import TELEGRAM_STRINGS
 from services.chat_view import ProgressHandle
 from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 from utils.logging import get_module_logger
@@ -65,6 +66,7 @@ class TelegramChatView:
     """
 
     source_label = "\U0001f4f1 Telegram"  # "📱 Telegram"
+    strings = TELEGRAM_STRINGS
 
     def __init__(
         self,
@@ -89,8 +91,8 @@ class TelegramChatView:
         messages = await self._sender.send_formatted(self._conversation_id, text)
         return len(messages) == len(fragments)
 
-    async def start_progress(self, text: str) -> ProgressHandle:
-        message = await self._sender.send_plain(self._conversation_id, text)
+    async def start_progress(self) -> ProgressHandle:
+        message = await self._sender.send_plain(self._conversation_id, self.strings.processing)
         if message is None:
             # The placeholder never reached Telegram, so this handle is a
             # no-op and the user will see NO progress UI at all. MessageSender

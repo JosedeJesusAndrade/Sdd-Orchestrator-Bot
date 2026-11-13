@@ -21,6 +21,7 @@ from flet_app.components.message_bubble import (
     user_message,
 )
 from flet_app.core.design_system import DS
+from flet_app.flet_strings import FLET_STRINGS
 from services.agent_sessions import Message
 from services.chat_view import ChatView, ProgressHandle
 
@@ -85,6 +86,7 @@ class FletChatView(ChatView):
     """Render conversation turns as Markdown in a scrollable Column."""
 
     source_label = "📱 Flet"
+    strings = FLET_STRINGS
 
     def __init__(
         self,
@@ -117,9 +119,9 @@ class FletChatView(ChatView):
             return False
         return True
 
-    async def start_progress(self, text: str) -> ProgressHandle:
+    async def start_progress(self) -> ProgressHandle:
         control = ft.Text(
-            value=text,
+            value=self.strings.processing,
             size=DS.typography.small_size,
             color=DS.colors.text_secondary,
             italic=True,

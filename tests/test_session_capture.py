@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from frontends.telegram.strings import TELEGRAM_STRINGS
 from services.ai_backend import AIBackendResult
 from services.chat_view import ConversationKey
 from services.opencode_cli_backend import (
@@ -287,6 +288,7 @@ class _Factory:
 
 class _View:
     source_label = "test"
+    strings = TELEGRAM_STRINGS
 
     def __init__(self) -> None:
         self.sent: list[str] = []
@@ -295,7 +297,7 @@ class _View:
         self.sent.append(text)
         return True
 
-    async def start_progress(self, text: str) -> _Handle:
+    async def start_progress(self) -> _Handle:
         return _Handle()
 
 

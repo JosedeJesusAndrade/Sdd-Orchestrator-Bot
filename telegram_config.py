@@ -31,6 +31,7 @@ TELEGRAM_MAX_MESSAGE_LENGTH = 4000
 CONNECTIVITY_CHECK_INTERVAL = 30  # seconds between connectivity pings
 CONNECTIVITY_FIRST_CHECK_DELAY = 10  # seconds before first connectivity check
 CONTAINER_KEY = "container"
+GATE_KEY = "gate"
 
 ALLOWED_CHAT_IDS_RAW = os.getenv("ALLOWED_CHAT_IDS", "")
 

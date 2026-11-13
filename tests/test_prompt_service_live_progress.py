@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 
+from frontends.telegram.strings import TELEGRAM_STRINGS
 from services.ai_backend import AIBackendResult
 from services.chat_view import ConversationKey
 from services.opencode_server.errors import OpenCodeStreamError
-from services.permissions import PERMISSION_REPLY_NOT_ACCEPTED_NOTICE
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo
 from tests.conversation_keys import conv
@@ -79,6 +79,7 @@ class _Handle:
 
 class _View:
     source_label = "test"
+    strings = TELEGRAM_STRINGS
 
     def __init__(self) -> None:
         self.sent: list[str] = []
@@ -87,7 +88,7 @@ class _View:
         self.sent.append(text)
         return True
 
-    async def start_progress(self, text: str) -> _Handle:
+    async def start_progress(self) -> _Handle:
         self.handle = _Handle()
         return self.handle
 
@@ -247,7 +248,7 @@ async def test_unapplied_permission_decision_is_visible_not_a_silent_success() -
 
     await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
-    assert view.sent == [f"Respuesta final\n\n{PERMISSION_REPLY_NOT_ACCEPTED_NOTICE}"]
+    assert view.sent == [f"Respuesta final\n\n{TELEGRAM_STRINGS.permission_not_accepted_notice}"]
     assert view.handle.finished == []
     assert view.handle.errors == [
         "\u26a0\ufe0f La decisión de permiso no se aplicó en el servidor."

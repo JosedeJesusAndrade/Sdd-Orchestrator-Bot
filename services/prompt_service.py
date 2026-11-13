@@ -45,13 +45,12 @@ from core_config import (
     OPENCODE_WORKDIR,
     PROGRESS_UPDATE_INTERVAL,
 )
-from services.permissions import PERMISSION_REPLY_NOT_ACCEPTED_NOTICE
 from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
     from services.ai_backend import AIBackend
     from services.ai_provider_factory import ProviderFactoryPort
-    from services.chat_view import ChatView, ConversationKey, ProgressHandle
+    from services.chat_view import ChatView, ConversationKey, CoreStrings, ProgressHandle
     from services.session_store import SessionInfo, SessionStorePort
 
 logger = get_module_logger(__name__)
@@ -181,8 +180,9 @@ class PromptService:
 
             self._log_prompt(conversation_id, prompt_text, model)
 
-            # 2. Open the "Processing..." progress placeholder via the view
-            handle = await view.start_progress("\u23f3 OpenCode procesando...")
+            # 2. Open the "Processing..." placeholder. The VIEW owns the text
+            # (strings.processing); the core passes no copy (item 4).
+            handle = await view.start_progress()
 
             # F3: one backend instance per conversation, created before the
             # ticker decision so a live-progress backend can replace the
@@ -192,16 +192,16 @@ class PromptService:
 
             progress_task: asyncio.Task[Any] | None = None
             if not live_progress:
-                progress_task = asyncio.create_task(self._update_progress(handle))
+                progress_task = asyncio.create_task(self._update_progress(handle, view.strings))
 
             # Check if cancelled during session sync (before backend execution)
             if conversation_id in self._cancel:
                 # Stop the periodic updater BEFORE painting the terminal state.
-                # Otherwise it would keep ticking and overwrite "Cancelado."
-                # with "⏳ OpenCode procesando... (Ns)".
+                # Otherwise it would keep ticking and overwrite the cancelled
+                # text with the elapsed-time progress text.
                 if progress_task is not None:
                     await self._stop_progress(progress_task)
-                await handle.error("\u23f9\ufe0f Cancelado.")
+                await handle.error(view.strings.cancelled)
                 return ""
 
             # 3. Execute OpenCode via AI backend
@@ -218,9 +218,10 @@ class PromptService:
             except Exception as exc:
                 # A typed backend failure (stream stalled, session.error, ...)
                 # must replace the live placeholder instead of leaving it on
-                # "⏳" forever. The error is re-raised so the caller logs it.
+                # the processing text forever. The error is re-raised so the
+                # caller logs it.
                 with contextlib.suppress(Exception):
-                    await handle.error(f"\u274c Error: {exc}")
+                    await handle.error(view.strings.error.format(error=exc))
                 raise
             finally:
                 if progress_task is not None:
@@ -356,12 +357,18 @@ class PromptService:
         view: ChatView,
         session: SessionInfo | None,
     ) -> None:
-        """Format and send the OpenCode response, or show an error."""
+        """Format and send the OpenCode response, or show an error.
+
+        UI copy comes exclusively from ``view.strings``: this method supplies
+        only the data (status, result, error) and the substitutions.
+        """
         from formatting.markdown import _assemble_response, clean_opencode_output
+
+        strings = view.strings
 
         # Handle cancellation
         if result["cancelled"]:
-            await handle.error("\u23f9\ufe0f Cancelado.")
+            await handle.error(strings.cancelled)
             return
 
         # Handle hard errors (non-zero exit + empty stdout, or errors via stderr)
@@ -370,7 +377,7 @@ class PromptService:
             error_text = clean_opencode_output(
                 result["stderr"] or result["stdout"] or "Unknown error"
             )
-            await handle.error(f"\u274c Error: {error_text[:500]}")
+            await handle.error(strings.error.format(error=error_text[:500]))
             return
 
         # Process and format the response
@@ -379,19 +386,19 @@ class PromptService:
 
         if not response.strip():
             if result["returncode"] != 0:
-                response = f"\u274c Error (c\u00f3digo {result['returncode']}): sin output."
+                response = strings.error_code_no_output.format(code=result["returncode"])
             else:
-                response = "\u2705 Completado (sin output)."
+                response = strings.completed_no_output
 
         # A permission decision the server never accepted must be VISIBLE: the
-        # agent may still be waiting, so a silent "✅" would be a lie.
+        # agent may still be waiting, so a silent success marker would be a lie.
         not_accepted = bool(result.get("permission_reply_not_accepted"))
         if not_accepted:
-            response = f"{response}\n\n{PERMISSION_REPLY_NOT_ACCEPTED_NOTICE}"
+            response = f"{response}\n\n{strings.permission_not_accepted_notice}"
 
         # Prepend new-session header for brand-new sessions
         if session is not None and not session.real_id and session.name:
-            response = f"\U0001f195 Nueva sesión '{session.name}' iniciada\n\n" + response
+            response = strings.new_session.format(name=session.name) + response
 
         # Track whether we actually delivered content
         is_success = result["returncode"] == 0
@@ -414,12 +421,12 @@ class PromptService:
         )
 
         # Always reach a terminal state — the placeholder must never be left
-        # stuck on "⏳". Before F8, an undelivered response called NEITHER
-        # finish NOR error, so the "⏳ OpenCode procesando..." message lived
+        # stuck on the processing text. Before F8, an undelivered response
+        # called NEITHER finish NOR error, so the placeholder message lived
         # forever.
         if response_sent and is_success and not not_accepted:
             try:
-                await handle.finish("\u2705 Completado.")
+                await handle.finish(strings.completed)
             except Exception:
                 log_exception(
                     "completion_edit_failed",
@@ -427,14 +434,14 @@ class PromptService:
                     level=logging.DEBUG,
                 )
         elif response_sent and not_accepted:
-            await handle.error("\u26a0\ufe0f La decisión de permiso no se aplicó en el servidor.")
+            await handle.error(strings.permission_not_accepted)
         elif not response_sent:
-            await handle.error("\u26a0\ufe0f No se pudo entregar la respuesta.")
+            await handle.error(strings.delivery_failed)
         else:
             # Defensive: a non-successful result that still delivered content.
             # Unreachable today (non-zero exit is handled above) but keeps the
             # placeholder from sticking if that changes.
-            await handle.error(f"\u274c Error (c\u00f3digo {result['returncode']}).")
+            await handle.error(strings.error_code.format(code=result["returncode"]))
 
         # Capture session ID for new sessions
         await self._persist_session_id(conversation_id, result.get("session_id"))
@@ -516,7 +523,7 @@ class PromptService:
 
         Called on EVERY path that reaches a terminal state (normal
         completion and the pre-execution cancel early return) so a stray
-        ``update()`` can never overwrite "⏹️ Cancelado." / "✅ Completado.".
+        ``update()`` can never overwrite the terminal cancelled/completed text.
         """
         progress_task.cancel()
         # Cancelled by us on purpose — collecting the CancelledError is
@@ -524,13 +531,13 @@ class PromptService:
         with contextlib.suppress(asyncio.CancelledError):
             await progress_task
 
-    async def _update_progress(self, handle: ProgressHandle) -> None:
+    async def _update_progress(self, handle: ProgressHandle, strings: CoreStrings) -> None:
         start = time.monotonic()
         try:
             while True:
                 await asyncio.sleep(PROGRESS_UPDATE_INTERVAL)
                 elapsed = int(time.monotonic() - start)
-                await handle.update(f"\u23f3 OpenCode procesando... ({elapsed}s)")
+                await handle.update(strings.processing_elapsed.format(elapsed=elapsed))
         except asyncio.CancelledError:
             # _update_progress is the periodic "(Ns)" editor; cancel propagation
             # is how the prompt loop stops it — expected, not a failure.

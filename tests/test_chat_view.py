@@ -14,8 +14,9 @@ from typing import Any
 
 from frontends.telegram.bot_port import MessageInfo
 from frontends.telegram.chat_view import TelegramChatView
+from frontends.telegram.strings import TELEGRAM_STRINGS
 from services.ai_backend import AIBackendResult
-from services.chat_view import ChatView, ConversationKey, ProgressHandle
+from services.chat_view import ChatView, ConversationKey, CoreStrings, ProgressHandle
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo, SessionStore
 from tests.conversation_keys import conv
@@ -110,9 +111,12 @@ class FakeProgress:
 
 class FakeChatView:
     source_label = "\U0001f9ea fake"  # "🧪 fake"
+    strings = TELEGRAM_STRINGS
 
-    def __init__(self, deliver: bool = True) -> None:
+    def __init__(self, deliver: bool = True, strings: CoreStrings | None = None) -> None:
         self.deliver = deliver
+        if strings is not None:
+            self.strings = strings
         self.started: list[str] = []
         self.sent: list[str] = []
         self.handles: list[FakeProgress] = []
@@ -122,7 +126,8 @@ class FakeChatView:
         self.sent.append(text)
         return self.deliver
 
-    async def start_progress(self, text: str) -> ProgressHandle:
+    async def start_progress(self) -> ProgressHandle:
+        text = self.strings.processing
         self.started.append(text)
         handle = FakeProgress(self, text)
         self.handles.append(handle)
@@ -331,7 +336,7 @@ async def test_telegram_chat_view_delegates_to_sender() -> None:
     assert view.source_label == "\U0001f4f1 Telegram"
     assert await view.send("resp") is True
 
-    handle = await view.start_progress("\u23f3 OpenCode procesando...")
+    handle = await view.start_progress()
     await handle.update("tick")
     await handle.finish("\u2705 Completado.")
     await handle.error("\u274c Error: x")
@@ -360,7 +365,7 @@ async def test_telegram_progress_handle_noop_when_placeholder_failed() -> None:
 
     sender = _FailingSender()
     view = TelegramChatView(sender, 42)
-    handle = await view.start_progress("x")
+    handle = await view.start_progress()
 
     await handle.update("tick")
     await handle.finish("done")
@@ -398,7 +403,7 @@ async def test_telegram_progress_placeholder_failure_logs_warning() -> None:
     try:
         sender = _FailingSender()
         view = TelegramChatView(sender, 42)
-        await view.start_progress("x")
+        await view.start_progress()
     finally:
         logger.removeHandler(probe)
         logger.setLevel(original_level)

@@ -40,6 +40,7 @@ from telegram_config import (
     CONNECTIVITY_CHECK_INTERVAL,
     CONNECTIVITY_FIRST_CHECK_DELAY,
     CONTAINER_KEY,
+    GATE_KEY,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     load_telegram_config,
@@ -52,6 +53,7 @@ setup_logger()
 
 from frontends.telegram.adapter import TelegramAdapter  # noqa: E402
 from frontends.telegram.container import AppContainer  # noqa: E402
+from frontends.telegram.gate import TelegramGate  # noqa: E402
 from frontends.telegram.message_sender import MessageSender  # noqa: E402
 from frontends.telegram.permission_presenter import TelegramPermissionPresenter  # noqa: E402
 from handlers.admin import session_preview_command, test_md_command  # noqa: E402
@@ -329,6 +331,10 @@ async def run_bot() -> None:
     load_telegram_config()
 
     app = build_application()
+
+    # Auth seam: ``@authorized`` reads this SAME gate from bot_data, so the
+    # allow-list check has one source of truth (item 5).
+    app.bot_data[GATE_KEY] = TelegramGate(ALLOWED_CHAT_IDS)
 
     await app.initialize()
     await app.start()

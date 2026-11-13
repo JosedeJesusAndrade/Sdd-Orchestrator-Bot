@@ -17,15 +17,24 @@ WHY THIS EXISTS (do not delete it as "unused"):
     ``AllowAllGate`` is the v1 policy: a local single-user app where access is
     physical access to the device.
 
+    ``authorize_request`` / ``finish_request`` are the ONE shared path both
+    entry points use: a fresh ``new_request_id()``, the ``handler_entry`` /
+    ``unauthorized`` / ``handler_exit`` events, and the allow decision. Telegram
+    (via ``@authorized``) and Flet (via ``on_send``) therefore log identically.
+
 This module imports only the standard library and ``services.chat_view``
 (itself PTB-free). Importing it must NOT put ``telegram`` into ``sys.modules``.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Protocol, runtime_checkable
 
 from services.conversation import ConversationKey
+from utils.logging import get_module_logger, mask_conversation_key, new_request_id
+
+logger = get_module_logger(__name__)
 
 
 @runtime_checkable
@@ -42,3 +51,60 @@ class AllowAllGate:
 
     def is_allowed(self, conversation_id: ConversationKey) -> bool:
         return True
+
+
+def authorize_request(
+    gate: FrontendGate,
+    conversation_id: ConversationKey,
+    handler: str,
+) -> bool:
+    """Start a request, log its entry, and apply the gate policy.
+
+    Shared by ``@authorized`` (Telegram) and the Flet ``on_send`` path so the
+    request id and the structured events cannot drift between frontends.
+
+    Returns ``True`` when the conversation may proceed. A denied request logs
+    ``unauthorized`` and returns ``False``.
+    """
+    new_request_id()
+    masked = mask_conversation_key(conversation_id)
+
+    logger.debug(
+        "Handler entry",
+        extra={
+            "event": "handler_entry",
+            "handler": handler,
+            "chat_id_masked": masked,
+        },
+    )
+
+    if not gate.is_allowed(conversation_id):
+        logger.warning(
+            "Unauthorized access",
+            extra={
+                "event": "unauthorized",
+                "handler": handler,
+                "chat_id_masked": masked,
+            },
+        )
+        return False
+
+    return True
+
+
+def finish_request(
+    handler: str,
+    conversation_id: ConversationKey,
+    started: float,
+) -> None:
+    """Log the matching ``handler_exit`` event with the elapsed duration."""
+    elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+    logger.debug(
+        "Handler exit",
+        extra={
+            "event": "handler_exit",
+            "handler": handler,
+            "chat_id_masked": mask_conversation_key(conversation_id),
+            "duration_ms": elapsed_ms,
+        },
+    )

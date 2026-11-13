@@ -14,13 +14,14 @@ import pytest
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from frontends.telegram.gate import TelegramGate
 from handlers.permissions import (
     ALREADY_RESOLVED_TOAST,
     INVALID_CALLBACK_TOAST,
     permission_callback,
 )
 from services.permissions import PermissionDecision, Reply
-from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY
+from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY, GATE_KEY
 
 
 class _FakeQuery:
@@ -63,7 +64,12 @@ def _build(
     )
     container = SimpleNamespace(permission_router=router)
     context = SimpleNamespace(
-        application=SimpleNamespace(bot_data={CONTAINER_KEY: container}),
+        application=SimpleNamespace(
+            bot_data={
+                CONTAINER_KEY: container,
+                GATE_KEY: TelegramGate(ALLOWED_CHAT_IDS),
+            }
+        ),
     )
     return update, query, context
 

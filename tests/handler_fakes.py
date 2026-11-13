@@ -10,7 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY
+from frontends.telegram.gate import TelegramGate
+from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY, GATE_KEY
 
 CHAT_ID = ALLOWED_CHAT_IDS[0]
 
@@ -72,7 +73,12 @@ def make_update(msg: FakeMessage, *, chat_id: int = CHAT_ID) -> Any:
 def make_context(container: Any, *, args: list[str] | None = None) -> Any:
     """Build the minimal PTB Context shape the handlers read."""
     return SimpleNamespace(
-        application=SimpleNamespace(bot_data={CONTAINER_KEY: container}),
+        application=SimpleNamespace(
+            bot_data={
+                CONTAINER_KEY: container,
+                GATE_KEY: TelegramGate(ALLOWED_CHAT_IDS),
+            }
+        ),
         args=args,
         bot=SimpleNamespace(),
     )

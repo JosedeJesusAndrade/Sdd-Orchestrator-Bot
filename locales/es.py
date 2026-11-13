@@ -41,11 +41,22 @@ VOICE_TRANSCRIBING = "\U0001f3a4 Transcribiendo audio..."
 VOICE_TRANSCRIPTION_FAILED = "\u274c No pude transcribir el audio."
 VOICE_RESULT = "\U0001f3a4 *Transcripci\u00f3n:*\n{text}"
 PROMPT_PROCESSING = "\u23f3 OpenCode procesando..."
+PROMPT_PROCESSING_ELAPSED = "\u23f3 OpenCode procesando... ({elapsed}s)"
 PROMPT_CANCELLED = "\u23f9\ufe0f Cancelado."
 PROMPT_COMPLETED = "\u2705 Completado."
 PROMPT_COMPLETED_NO_OUTPUT = "\u2705 Completado (sin output)."
-PROMPT_NEW_SESSION = "\U0001f195 Nueva sesi\u00f3n `{name}` iniciada"
+PROMPT_NEW_SESSION = "\U0001f195 Nueva sesi\u00f3n '{name}' iniciada\n\n"
 PROMPT_ERROR = "\u274c Error: {error}"
+PROMPT_ERROR_CODE = "\u274c Error (c\u00f3digo {code})."
+PROMPT_ERROR_CODE_NO_OUTPUT = "\u274c Error (c\u00f3digo {code}): sin output."
+PROMPT_DELIVERY_FAILED = "\u26a0\ufe0f No se pudo entregar la respuesta."
+PERMISSION_NOT_ACCEPTED = (
+    "\u26a0\ufe0f La decisi\u00f3n de permiso no se aplic\u00f3 en el servidor."
+)
+PERMISSION_NOT_ACCEPTED_NOTICE = (
+    "\u26a0\ufe0f Tu decisi\u00f3n de permiso no se pudo aplicar en el servidor. "
+    "El agente pudo haber seguido esperando."
+)
 PROMPT_BUSY = "\u23f3 Ya hay un prompt en proceso."
 CONFIG_HEADER = "\u2699\ufe0f *Tu configuraci\u00f3n:*"
 CONFIG_UNKNOWN_KEY = "Clave desconocida: `{key}`. Us\u00e1: model, timeout, workdir, provider"

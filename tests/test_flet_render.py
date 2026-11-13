@@ -19,6 +19,7 @@ from typing import cast
 import flet as ft
 
 from flet_app.flet_chat_view import FletChatView
+from flet_app.flet_strings import FLET_STRINGS
 from flet_app.screens.chat_screen import ChatScreen, build_chat_screen
 
 _REPO = str(Path(__file__).resolve().parents[1])
@@ -69,10 +70,16 @@ async def test_send_appends_to_the_attached_visible_column() -> None:
     assert page.update_calls == 1
 
 
+def test_flet_view_exposes_its_own_strings() -> None:
+    view, _, _ = _build_view()
+
+    assert view.strings is FLET_STRINGS
+
+
 async def test_progress_row_is_appended_and_finished_in_place() -> None:
     view, chat, page = _build_view()
 
-    handle = await view.start_progress("\u23f3 OpenCode procesando...")
+    handle = await view.start_progress()
     assert len(chat.conversation.controls) == 1
 
     await handle.finish("\u2705 Completado.")
