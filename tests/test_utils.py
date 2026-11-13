@@ -7,13 +7,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from formatting.markdown import (
-    _filter_stderr,
-    clean_opencode_output,
+from formatting.markdown import _filter_stderr, clean_opencode_output
+from frontends.telegram.formatting import (
     minimal_escape_mdv2,
     split_message,
     telegramify_markdown,
 )
+from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
 
 class TestCleanOpencodeOutput:
@@ -120,18 +120,18 @@ class TestSplitMessage:
 
     def test_short_message_not_split(self):
         text = "Hello world"
-        result = split_message(text)
+        result = split_message(text, TELEGRAM_MAX_MESSAGE_LENGTH)
         assert len(result) == 1
         assert result[0] == "Hello world"
 
     def test_long_message_is_split(self):
         text = "x" * 5000
-        result = split_message(text)
+        result = split_message(text, TELEGRAM_MAX_MESSAGE_LENGTH)
         assert len(result) > 1
 
     def test_split_preserves_content(self):
         text = "Hello " * 1000
-        result = split_message(text)
+        result = split_message(text, TELEGRAM_MAX_MESSAGE_LENGTH)
         combined = "".join(result)
         assert "Hello" in combined
 

@@ -9,7 +9,7 @@ and the field shape of a representative inline weak-log fix.
 import logging
 from typing import Any
 
-from services.bot_port import MessageInfo
+from frontends.telegram.bot_port import MessageInfo
 from utils.logging import log_exception
 
 SWALLOWED = "opencode_bot.swallowed"
@@ -134,7 +134,8 @@ def test_configured_handlers_pass_debug_end_to_end() -> None:
 
 async def test_inline_weak_log_has_event_and_exc_info() -> None:
     """Representative inline weak-log fix: event= plus exc_info attached."""
-    from services.message_sender import MessageSender
+    from frontends.telegram.message_sender import MessageSender
+    from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
     class _BoomBot:
         async def send_message(
@@ -153,11 +154,11 @@ async def test_inline_weak_log_has_event_and_exc_info() -> None:
         async def get_me(self) -> dict[str, Any]:
             raise NotImplementedError
 
-    logger = logging.getLogger("opencode_bot.services.message_sender")
+    logger = logging.getLogger("opencode_bot.frontends.telegram.message_sender")
     probe = _Probe(level=logging.DEBUG)
     logger.addHandler(probe)
     try:
-        sender = MessageSender(_BoomBot())
+        sender = MessageSender(_BoomBot(), max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
         await sender.send_plain(123456789, "hi")
 
         assert len(probe.records) == 1

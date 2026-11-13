@@ -41,6 +41,7 @@ from telegram_config import (
     CONNECTIVITY_FIRST_CHECK_DELAY,
     CONTAINER_KEY,
     TELEGRAM_BOT_TOKEN,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     load_telegram_config,
 )
 
@@ -49,6 +50,10 @@ from telegram_config import (
 # setup_logger() at import), so this must happen before any code that logs.
 setup_logger()
 
+from frontends.telegram.adapter import TelegramAdapter  # noqa: E402
+from frontends.telegram.container import AppContainer  # noqa: E402
+from frontends.telegram.message_sender import MessageSender  # noqa: E402
+from frontends.telegram.permission_presenter import TelegramPermissionPresenter  # noqa: E402
 from handlers.admin import session_preview_command, test_md_command  # noqa: E402
 from handlers.ci import pr_command, update_command, wdir_command  # noqa: E402
 from handlers.commands import (  # noqa: E402
@@ -68,15 +73,11 @@ from handlers.sessions import session_command  # noqa: E402
 from opencode.client import query_opencode_db  # noqa: E402
 from persistence.sessions import fetch_opencode_sessions  # noqa: E402
 from services.composition import build_prompt_stack  # noqa: E402
-from services.container import AppContainer  # noqa: E402
-from services.message_sender import MessageSender  # noqa: E402
 from services.server_lifecycle import (  # noqa: E402
     log_startup_failure,
     start_server_or_exit,
     stop_server_lifecycle,
 )
-from services.telegram_adapter import TelegramAdapter  # noqa: E402
-from services.telegram_permission_presenter import TelegramPermissionPresenter  # noqa: E402
 from utils.logging import get_module_logger, log_exception  # noqa: E402
 
 # Literal "bot" (not __name__): this module runs as "__main__", which would
@@ -363,7 +364,7 @@ async def run_bot() -> None:
     # Only the PTB transport pieces stay here; the provider registration and
     # the SessionStore/PromptService wiring moved into build_prompt_stack().
     bot_port = TelegramAdapter(app.bot)
-    message_sender = MessageSender(bot_port)
+    message_sender = MessageSender(bot_port, max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
 
     container = AppContainer(
         session_store=core.session_store,

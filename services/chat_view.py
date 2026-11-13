@@ -2,12 +2,12 @@
 
 ETC seam: ``PromptService`` depends on this abstraction, never on Telegram.
 Telegram is ONE implementation (``TelegramChatView`` in
-``services.telegram_chat_view``); a future Flet frontend can implement the
+``frontends.telegram.chat_view``); a future Flet frontend can implement the
 same Protocol without touching the core.
 
 This module is deliberately PTB-free: it imports only the standard library.
 Importing it must NOT put ``telegram`` into ``sys.modules`` — the concrete
-Telegram adapter lives in ``services.telegram_chat_view``.
+Telegram adapter lives in ``frontends.telegram.chat_view``.
 
 The progress handle is intentionally OPAQUE: the core only knows
 "update/finish/error in place" — it never sees a frontend-specific

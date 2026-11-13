@@ -15,10 +15,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core_config import DEFAULT_SESSION_NAME
+from frontends.telegram.container import AppContainer
 from handlers import authorized
 from handlers._guards import require_chat, require_message
 from persistence.sessions import fetch_opencode_sessions, load_session_map_safe
-from services.container import AppContainer
 from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, log_exception
 

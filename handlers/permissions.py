@@ -29,8 +29,8 @@ from typing import cast
 from telegram import CallbackQuery, Update
 from telegram.ext import ContextTypes
 
+from frontends.telegram.container import AppContainer
 from handlers import authorized
-from services.container import AppContainer
 from services.permissions import PermissionDecision, Reply
 from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, log_exception

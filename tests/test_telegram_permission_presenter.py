@@ -14,8 +14,7 @@ from typing import Any, cast
 import pytest
 from telegram import Bot, InlineKeyboardMarkup
 
-from services.permissions import PermissionDecision, PermissionRequest
-from services.telegram_permission_presenter import (
+from frontends.telegram.permission_presenter import (
     RESULT_CANCELLED,
     RESULT_PERMITTED,
     RESULT_PERMITTED_ALWAYS,
@@ -26,6 +25,7 @@ from services.telegram_permission_presenter import (
     build_keyboard,
     format_permission_request,
 )
+from services.permissions import PermissionDecision, PermissionRequest
 
 
 def _request(
@@ -214,7 +214,7 @@ async def test_show_logs_the_presenter_show_event(
     request = _request()
 
     with caplog.at_level(
-        logging.INFO, logger="opencode_bot.services.telegram_permission_presenter"
+        logging.INFO, logger="opencode_bot.frontends.telegram.permission_presenter"
     ):
         await presenter.show(request)
 
@@ -370,7 +370,7 @@ async def test_resolve_logs_the_presenter_resolve_event(
 
     await presenter.show(request)
     with caplog.at_level(
-        logging.INFO, logger="opencode_bot.services.telegram_permission_presenter"
+        logging.INFO, logger="opencode_bot.frontends.telegram.permission_presenter"
     ):
         await presenter.resolve(request.id, PermissionDecision(reply="once"))
 

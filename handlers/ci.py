@@ -15,9 +15,9 @@ from typing import cast
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from frontends.telegram.container import AppContainer
 from handlers import authorized
 from handlers._guards import require_chat
-from services.container import AppContainer
 from telegram_config import CONTAINER_KEY
 
 

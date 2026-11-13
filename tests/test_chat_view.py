@@ -12,12 +12,12 @@ import asyncio
 import json
 from typing import Any
 
+from frontends.telegram.bot_port import MessageInfo
+from frontends.telegram.chat_view import TelegramChatView
 from services.ai_backend import AIBackendResult
-from services.bot_port import MessageInfo
 from services.chat_view import ChatView, ConversationId, ProgressHandle
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo, SessionStore
-from services.telegram_chat_view import TelegramChatView
 
 # ── Fakes (core, frontend-agnostic) ────────────────────────────────────
 
@@ -389,7 +389,7 @@ async def test_telegram_progress_placeholder_failure_logs_warning() -> None:
         def emit(self, record: logging.LogRecord) -> None:
             self.records.append(record)
 
-    logger = logging.getLogger("opencode_bot.services.telegram_chat_view")
+    logger = logging.getLogger("opencode_bot.frontends.telegram.chat_view")
     original_level = logger.level
     logger.setLevel(logging.DEBUG)
     probe = _Probe()
@@ -563,11 +563,11 @@ class _PartialDeliveryBot:
 
 
 def _two_fragment_text() -> str:
-    from formatting.markdown import split_message
+    from frontends.telegram.formatting import split_message
     from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
     text = "x" * (TELEGRAM_MAX_MESSAGE_LENGTH + 50)
-    assert len(split_message(text)) == 2
+    assert len(split_message(text, TELEGRAM_MAX_MESSAGE_LENGTH)) == 2
     return text
 
 
@@ -575,11 +575,12 @@ async def test_f8_partial_delivery_reports_failure_and_logs() -> None:
     """F8 (a): ``send`` means WHOLE delivery; partial emits delivery_partial."""
     import logging
 
-    from services.message_sender import MessageSender
+    from frontends.telegram.message_sender import MessageSender
+    from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
     text = _two_fragment_text()
     bot = _PartialDeliveryBot()
-    sender = MessageSender(bot)
+    sender = MessageSender(bot, max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
     view = TelegramChatView(sender, 7)
 
     class _Probe(logging.Handler):
@@ -590,7 +591,7 @@ async def test_f8_partial_delivery_reports_failure_and_logs() -> None:
         def emit(self, record: logging.LogRecord) -> None:
             self.records.append(record)
 
-    logger = logging.getLogger("opencode_bot.services.message_sender")
+    logger = logging.getLogger("opencode_bot.frontends.telegram.message_sender")
     probe = _Probe()
     logger.addHandler(probe)
     try:
@@ -613,11 +614,12 @@ async def test_f8_partial_delivery_leaves_placeholder_in_error_state() -> None:
     Before: ``_deliver_response`` called NEITHER finish NOR error when
     ``response_sent`` was False, so "⏳ OpenCode procesando..." stuck forever.
     """
-    from services.message_sender import MessageSender
+    from frontends.telegram.message_sender import MessageSender
+    from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
     text = _two_fragment_text()
     bot = _PartialDeliveryBot()
-    sender = MessageSender(bot)
+    sender = MessageSender(bot, max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
     view = TelegramChatView(sender, 7)
 
     backend = FakeBackend(AIBackendResult(stdout=text, returncode=0))

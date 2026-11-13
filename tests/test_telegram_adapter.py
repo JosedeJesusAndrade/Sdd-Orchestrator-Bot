@@ -20,9 +20,10 @@ from typing import Any, cast
 import pytest
 from telegram import Bot
 
-from services.bot_port import MessageInfo
-from services.message_sender import MessageSender
-from services.telegram_adapter import TelegramAdapter
+from frontends.telegram.adapter import TelegramAdapter
+from frontends.telegram.bot_port import MessageInfo
+from frontends.telegram.message_sender import MessageSender
+from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
 # ── Fake PTB bot ──────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ class _FlakyBotPort:
 
 async def test_message_sender_still_falls_back_end_to_end() -> None:
     bot = _FlakyBotPort()
-    sender = MessageSender(bot)
+    sender = MessageSender(bot, max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
 
     messages = await sender.send_formatted(3, "*hi*")
 
@@ -134,13 +135,13 @@ async def test_message_sender_still_falls_back_end_to_end() -> None:
 async def test_mdv2_failure_event_is_emitted_exactly_once(monkeypatch) -> None:
     """One logical failure must produce one ``mdv2_first_attempt_failed``.
 
-    Probes the whole swallowed namespace (both ``...services.message_sender``
-    and ``...services.telegram_adapter`` propagate here), so the assertion
+    Probes the whole swallowed namespace (both ``...frontends.telegram.message_sender``
+    and ``...frontends.telegram.adapter`` propagate here), so the assertion
     fails if EITHER layer logs the event — i.e. it proves there is no
     duplicate.
     """
     bot = _FlakyBotPort()
-    sender = MessageSender(bot)
+    sender = MessageSender(bot, max_message_length=TELEGRAM_MAX_MESSAGE_LENGTH)
 
     owner = logging.getLogger("opencode_bot.swallowed")
     original_level = owner.level

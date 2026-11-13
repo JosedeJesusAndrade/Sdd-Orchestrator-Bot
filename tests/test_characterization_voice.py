@@ -19,9 +19,9 @@ from typing import Any
 
 import pytest
 
+from frontends.telegram.chat_view import TelegramChatView
 from handlers import messages
 from services.prompt_service import PromptAlreadyRunningError
-from services.telegram_chat_view import TelegramChatView
 from tests.handler_fakes import (
     CHAT_ID,
     FakeMessage,

@@ -64,7 +64,7 @@ def get_module_logger(name: str | None = None) -> logging.Logger:
 #         logging.getLogger("opencode_bot.swallowed").setLevel(logging.WARNING)
 #     Children inherit the parent level, so the knob covers all modules.
 #   - Hierarchical filtering: raising a single child
-#     (`...swallowed.services.message_sender`) isolates one noisy module.
+#     (`...swallowed.frontends.telegram.message_sender`) isolates one noisy module.
 #   - TRADEOFF: records appear under `opencode_bot.swallowed.<module>` instead
 #     of the usual `opencode_bot.<module>` name, so the owning module is
 #     encoded in the swallowed logger name. Deliberate: it is the price for

@@ -15,6 +15,9 @@ Architecture rationale:
     - Holds the BotPort instance, avoiding repeated param passing
     - Testable: inject a mock BotPort
     - Single place for logging/error handling policy
+
+  The Bot-API chunk size is INJECTED (``max_message_length`` from
+  ``telegram_config``) so the core holds no Telegram limits.
 """
 
 from __future__ import annotations
@@ -22,8 +25,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from formatting.markdown import split_message
-from services.bot_port import BotPort, MessageInfo
+from frontends.telegram.bot_port import BotPort, MessageInfo
+from frontends.telegram.formatting import split_message
 from utils.logging import get_module_logger, log_exception
 
 logger = get_module_logger(__name__)
@@ -49,13 +52,16 @@ class MessageSender:
     calling context.bot.send_message() directly.
     """
 
-    def __init__(self, bot: BotPort) -> None:
+    def __init__(self, bot: BotPort, *, max_message_length: int) -> None:
         """Initialize with a BotPort implementation.
 
         Args:
             bot: A BotPort implementation (e.g., TelegramAdapter).
+            max_message_length: Bot-API chunk size, injected from
+                ``telegram_config.TELEGRAM_MAX_MESSAGE_LENGTH``.
         """
         self._bot = bot
+        self._max_message_length = max_message_length
 
     async def send_formatted(self, chat_id: int, text: str) -> list[MessageInfo]:
         """Send text with MarkdownV2 formatting.
@@ -68,7 +74,7 @@ class MessageSender:
         deliveries are observable. The caller (ChatView) interprets an
         incomplete list as a failed delivery.
         """
-        fragments = split_message(text)
+        fragments = split_message(text, self._max_message_length)
         messages: list[MessageInfo] = []
         for fragment in fragments:
             msg = await self._send_mdv2_with_fallback(chat_id, fragment)

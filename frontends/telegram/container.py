@@ -1,5 +1,9 @@
 """AppContainer — explicit, typed dependency injection container.
 
+This is the TELEGRAM composition payload: it bundles the shared core services
+with the Telegram transport (``MessageSender`` / ``BotPort``). It lives in
+``frontends/telegram`` so ``services`` never imports a frontend.
+
 All bot dependencies in one dataclass. Immutable after construction.
 Injected via PTB's context.application.bot_data["container"].
 """
@@ -10,10 +14,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from frontends.telegram.bot_port import BotPort
+    from frontends.telegram.message_sender import MessageSender
     from services.ai_provider_factory import AIProviderFactory
-    from services.bot_port import BotPort
     from services.health_service import HealthService
-    from services.message_sender import MessageSender
     from services.permission_router import PermissionRouter
     from services.prompt_service import PromptService
     from services.session_service import SessionService

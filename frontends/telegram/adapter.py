@@ -10,7 +10,7 @@ from typing import Any
 
 from telegram import Bot, Message
 
-from services.bot_port import MessageInfo
+from frontends.telegram.bot_port import MessageInfo
 from utils.logging import get_module_logger, log_exception
 
 logger = get_module_logger(__name__)

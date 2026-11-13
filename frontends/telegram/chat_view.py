@@ -3,14 +3,18 @@
 Kept OUT of ``services.chat_view`` (the contract module) so that importing
 the contract never drags in ``telegram``. This adapter is the only ChatView
 aware of ``MessageSender`` / Telegram ``message_id``.
+
+The Bot-API chunk size is read from ``telegram_config`` (the Telegram layer),
+never from the core.
 """
 
 from __future__ import annotations
 
-from formatting.markdown import split_message
-from services.bot_port import MessageInfo
+from frontends.telegram.bot_port import MessageInfo
+from frontends.telegram.formatting import split_message
+from frontends.telegram.message_sender import MessageSenderPort
 from services.chat_view import ProgressHandle
-from services.message_sender import MessageSenderPort
+from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 from utils.logging import get_module_logger
 
 logger = get_module_logger(__name__)
@@ -62,9 +66,16 @@ class TelegramChatView:
 
     source_label = "\U0001f4f1 Telegram"  # "📱 Telegram"
 
-    def __init__(self, sender: MessageSenderPort, conversation_id: int) -> None:
+    def __init__(
+        self,
+        sender: MessageSenderPort,
+        conversation_id: int,
+        *,
+        max_message_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+    ) -> None:
         self._sender = sender
         self._conversation_id = conversation_id
+        self._max_message_length = max_message_length
 
     async def send(self, text: str) -> bool:
         """Deliver ``text``; True only if the WHOLE message was delivered.
@@ -74,7 +85,7 @@ class TelegramChatView:
         UI showed "✅ Completado." for a mostly-missing response. Now a partial
         delivery is a failure for status purposes.
         """
-        fragments = split_message(text)
+        fragments = split_message(text, self._max_message_length)
         messages = await self._sender.send_formatted(self._conversation_id, text)
         return len(messages) == len(fragments)
 

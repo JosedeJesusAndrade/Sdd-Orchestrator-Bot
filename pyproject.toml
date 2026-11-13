@@ -25,6 +25,8 @@ gui = [
 [tool.setuptools]
 packages = [
     "formatting",
+    "frontends",
+    "frontends.telegram",
     "handlers",
     "locales",
     "opencode",

@@ -23,11 +23,11 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from core_config import OPENAI_API_KEY
+from frontends.telegram.chat_view import TelegramChatView
+from frontends.telegram.container import AppContainer
 from handlers import authorized
 from handlers._guards import require_chat, require_message, require_text
-from services.container import AppContainer
 from services.prompt_service import PromptAlreadyRunningError
-from services.telegram_chat_view import TelegramChatView
 from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, log_exception, mask_chat_id
 
