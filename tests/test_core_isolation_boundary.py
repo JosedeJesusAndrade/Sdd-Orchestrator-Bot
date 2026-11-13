@@ -40,14 +40,20 @@ def test_core_modules_are_ptb_free() -> None:
         assert loaded == set(), f"{module} imported {sorted(loaded)}"
 
 
-def test_services_package_imports_no_telegram_or_frontends() -> None:
+def test_services_package_imports_no_telegram_flet_or_frontends() -> None:
+    forbidden = (
+        "import telegram",
+        "from telegram",
+        "import flet",
+        "from flet",
+        "import frontends",
+        "from frontends",
+    )
     offenders: list[str] = []
     for path in sorted(_SERVICES_DIR.rglob("*.py")):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith(("import telegram", "from telegram")):
-                offenders.append(f"{path}:{lineno}: {stripped}")
-            if stripped.startswith(("import frontends", "from frontends")):
+            if stripped.startswith(forbidden):
                 offenders.append(f"{path}:{lineno}: {stripped}")
 
     assert offenders == [], "services/ must stay frontend-agnostic:\n" + "\n".join(offenders)

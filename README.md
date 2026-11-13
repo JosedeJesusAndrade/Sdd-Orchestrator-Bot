@@ -6,9 +6,9 @@ Telegram bridge for OpenCode CLI. Ejecuta prompts de desarrollo contra múltiple
 
 `Sdd-Orchestrator-Telegram-Bot` es una aplicación Python que conecta Telegram con el ejecutable de OpenCode CLI para habilitar desarrollo asistido por IA desde dispositivos móviles. El bot recibe mensajes de texto o voz en un chat autorizado, los reenvía al backend de IA configurado y devuelve la respuesta formateada a Telegram.
 
-El proyecto existe para提供一个 punto de acceso móvil a flujos de trabajo de Spec-Driven Development. En lugar de depender de una terminal local, el usuario envía prompts desde el teléfono, gestiona sesiones por chat, cambia de modelo, crea Pull Requests y actualiza el bot sin abrir una laptop.
+El proyecto existe para ofrecer un punto de acceso móvil a flujos de trabajo de Spec-Driven Development. En lugar de depender de una terminal local, el usuario envía prompts desde el teléfono, gestiona sesiones por chat, cambia de modelo, crea Pull Requests y actualiza el bot sin abrir una laptop.
 
-La arquitectura sigue una separación clara por capas: handlers de comandos, servicios con inyección de dependencias, y adaptadores intercambiables. El protocolo `AIBackend` abstrae OpenCode CLI, mientras `BotPort` abstrae `python-telegram-bot`. Esto permite sustituir el backend de IA o la plataforma de mensajería sin modificar la lógica de negocio.
+La arquitectura es un **core frontend-agnóstico**: la lógica de negocio vive en `services/` y no importa Telegram ni Flet; cada plataforma es un adaptador (`frontends/telegram/`, `flet_app/`) que implementa los puertos del core. El protocolo `AIBackend` abstrae OpenCode, `ChatView` abstrae la conversación y `FrontendGate` abstrae la autorización. Esto permite agregar o sustituir un frontend —o el backend de IA— sin modificar el dominio.
 
 ## Características
 
@@ -114,7 +114,7 @@ La plantilla completa, comentada y con los valores por defecto es [`.env.example
 Copy-Item .env.example .env
 ```
 
-`config.py` carga `.env` al importarse, pero importar el módulo no arranca nada ni valida el servidor: las comprobaciones viven en el arranque real.
+La configuración está partida en dos módulos: `core_config.py` (todo lo que un embedder necesita, **sin `SystemExit` en import**) y `telegram_config.py` (token y allow-list, validados explícitamente por `load_telegram_config()` en el arranque). Importar cualquiera de los dos no arranca nada ni valida el servidor: las comprobaciones viven en el arranque real.
 
 | Variable | Obligatoria | Default | Notas |
 |---|---|---|---|
@@ -189,33 +189,84 @@ Una vez iniciado, el bot responde en los chats autorizados. Ejemplos de uso habi
 Cualquier mensaje de texto que no comience con `/` se interpreta como un prompt directo y se envía al backend configurado en la sesión activa.
 
 ## Arquitectura
-El proyecto sigue una arquitectura por capas con inyección de dependencias. `bot.py` actúa como punto de entrada y construye un `AppContainer` que provee los servicios a los handlers mediante `context.bot_data`.
+
+El proyecto es un **core frontend-agnóstico** con dos frontends: Telegram (en producción) y una GUI de Flet. Un API HTTP puede montarse encima del mismo core sin tocar la lógica de negocio. La regla que sostiene el diseño es una sola:
+
+> `services/` nunca importa `telegram`, `flet`, `frontends/`, `handlers/` ni `bot.py`.
+
+No es una convención verbal: la suite la verifica en cada corrida (ver [Cómo se prueba el límite](#cómo-se-prueba-el-límite)).
 
 ```text
-bot.py → AppContainer (DI)
-           ├── AIProviderFactory → OpenCodeCLIBackend (AIBackend Protocol)
-           ├── TelegramAdapter (BotPort Protocol)
-           ├── SessionStore → sessions.json
-           ├── MessageSender (mensajería unificada)
-           └── PromptService (orquestación)
-
-handlers → container.prompt_service.execute()
-          → locales.get_strings() para i18n
-          → @authorized decorator para autenticación
+                    ┌────────────────────────────┐
+                    │  API HTTP (futura)         │  ← aún no existe
+                    └─────────────┬──────────────┘
+                                  │ usa
+    ┌──────────────┐    ┌─────────▼──────────────┐    ┌──────────────────┐
+    │   Telegram   │    │   CORE (services/)     │    │      Flet        │
+    │ frontends/   │───▶│   dominio + puertos    │◀───│   flet_app/      │
+    │ telegram/    │    │   + core_config.py     │    │                  │
+    └──────┬───────┘    └─────────┬──────────────┘    └────────┬─────────┘
+           │                      │                            │
+   python-telegram-bot     OpenCode CLI / servidor         Flet UI
 ```
 
-Componentes principales:
+Las flechas apuntan en una sola dirección: los frontends dependen del core, el core no sabe que existen. `bot.py` y `flet_app/main.py` son los *composition roots*: cada uno llama a `build_prompt_stack()` y le inyecta sus propios adaptadores.
 
-| Capa | Archivo | Responsabilidad |
-|---|---|---|
-| Presentación | `handlers/` | Comandos de Telegram, autorización, parsing de argumentos |
-| Servicios | `services/container.py`, `services/prompt_service.py` | Orquestación y composición de dependencias |
-| Datos | `services/session_store.py` | Persistencia thread-safe de sesiones en `sessions.json` |
-| Adaptadores | `services/opencode_cli_backend.py`, `services/telegram_adapter.py` | Implementaciones concretas detrás de los protocolos |
-| Formato | `formatting/markdown.py` | Limpieza y troceo de la salida para Telegram |
-| i18n | `locales/es.py` | Strings de usuario centralizadas |
+### Las tres capas
 
-Para una descripción detallada, consultar [DOCUMENTACION.md](DOCUMENTACION.md).
+| Capa | Dónde vive | Responsabilidad | Puede importar |
+|---|---|---|---|
+| Core | `services/`, `core_config.py`, `formatting/`, `opencode/`, `persistence/` | Dominio, orquestación, persistencia y contratos | stdlib + `core_config` |
+| Frontends | `frontends/telegram/`, `flet_app/`, `handlers/`, `bot.py` | Transporte, UI, autenticación y composición | todo el core |
+| API (futura) | — | Exponer el core por HTTP | el core |
+
+Módulos concretos del frontend de Telegram: `frontends/telegram/adapter.py` (BotPort), `chat_view.py` (ChatView + progreso), `message_sender.py` (MarkdownV2 + troceo), `permission_presenter.py`, `gate.py` (allow-list), `keys.py` (`telegram:{id}`), `strings.py` (copy) y `container.py` (payload DI de Telegram).
+
+### Los puertos
+
+El core habla con el exterior solo a través de `Protocol`s:
+
+| Puerto | Contrato | Telegram | Flet |
+|---|---|---|---|
+| `ChatView` + `CoreStrings` | `services/chat_view.py` | `frontends/telegram/chat_view.py` | `flet_app/flet_chat_view.py` |
+| `PermissionPort` / `PermissionPresenter` | `services/permissions.py` | `frontends/telegram/permission_presenter.py` | `flet_app/flet_permission_presenter.py` |
+| `AIBackend` | `services/ai_backend.py` | `opencode_server_backend.py` / `opencode_cli_backend.py` (compartido) | igual |
+| `FrontendGate` | `services/frontend_gate.py` | `TelegramGate` en `frontends/telegram/gate.py` | `AllowAllGate` |
+| `ConversationKey` | `services/conversation.py` | `frontends/telegram/keys.py` | `flet_app/keys.py` |
+
+Los servicios de negocio (`SessionStore`, `PromptService`, `SessionService`, `WorkdirService`, `PullRequestService`, `TranscriptionService`, `SettingsService`, `HealthService`, `StatusService`) viven en `services/` y son PTB-free.
+
+### Identidad de conversación
+
+Toda conversación se identifica por una clave opaca con namespace: `telegram:{chat_id}` o `flet:local`. El core nunca ve un `int` ni un `str` crudo, y `SessionStore` migra las claves legadas de forma idempotente con backup `sessions.json.bak`. Decisión completa en [ADR 0002](docs/adr/0002-conversation-key.md).
+
+### Configuración: dos mitades
+
+- `core_config.py`: paths, logging, OpenCode, OpenAI, modelos y sesiones. **Sin `SystemExit` en import.**
+- `telegram_config.py`: token y `ALLOWED_CHAT_IDS`, validados explícitamente por `load_telegram_config()` en el arranque del bot.
+
+Así `python -c "import services.composition"` funciona sin ninguna variable de Telegram. Decisión completa en [ADR 0001](docs/adr/0001-frontend-agnostic-core.md).
+
+### Cómo se prueba el límite
+
+- `tests/test_core_isolation_boundary.py`: importa cada módulo del core en un subproceso y exige `telegram`/`flet`/`frontends` fuera de `sys.modules`; además escanea `services/**` en busca de importaciones prohibidas.
+- `tests/seam_support.py`: helper compartido del probe de `sys.modules`.
+- `tests/test_config_split.py`: `core_config` y `services.composition` importan sin entorno Telegram.
+- `tests/test_core_strings.py`: un `CoreStrings` con centinelas prueba que `PromptService` no decide copy.
+- `tests/test_session_store_migration.py`: migración de claves, idempotencia y backup.
+- `tests/test_authorized.py` + `tests/test_frontend_gate.py`: un solo camino de autorización.
+
+### Cómo agregar un frontend
+
+1. Crea `frontends/<nombre>/` (o un paquete hermano como `flet_app/`).
+2. Implementa `ChatView` + `CoreStrings`, `PermissionPresenter` y `FrontendGate`.
+3. Acuña sus claves con `make_conversation_key("<nombre>", ...)`; nunca pases un `int` crudo al core.
+4. En el entry point, llama a `setup_logger()`, `build_prompt_stack()` y `authorize_request()`/`finish_request()` — el mismo camino que Telegram.
+5. Registra el paquete en `pyproject.toml`.
+6. Agrega el módulo a `test_core_isolation_boundary.py`: el core debe seguir sin importarte.
+7. Agrega tests de caracterización; la lógica de negocio no se duplica.
+
+Para el detalle de decisiones y el porqué, consulta los ADRs en [`docs/adr/`](docs/adr/) y [DOCUMENTACION.md](DOCUMENTACION.md).
 
 ## Comandos
 
