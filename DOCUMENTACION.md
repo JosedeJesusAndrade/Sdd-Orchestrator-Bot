@@ -1,6 +1,6 @@
 # Sdd-Orchestrator-Telegram-Bot — Documentación técnica
 
-Documentación del estado real del repositorio en `main` (HEAD `79a7eb1`).
+Documentación del estado real del repositorio en `main` (HEAD `862b8c0`).
 Está dirigida a quien necesita mantener, extender o desplegar el bot.
 
 > **Nombre del proyecto.** El directorio local, el remoto de GitHub
@@ -279,10 +279,10 @@ Para agregar un chat:
 3. Agrega el ID a `ALLOWED_CHAT_IDS`.
 4. Reinicia el bot.
 
-Gotcha: `get_chat_id.py` carga `TELEGRAM_BOT_TOKEN` desde
-`Path(__file__).resolve().parent.parent / ".env"`, es decir, el directorio
-**padre** del repositorio. Si tu `.env` está en la raíz del repo, exporta la
-variable en el entorno o ajusta esa ruta antes de ejecutarlo.
+`get_chat_id.py` carga `TELEGRAM_BOT_TOKEN` desde
+`Path(__file__).resolve().parent / ".env"`, es decir, la **raíz** del
+repositorio (el mismo `.env` que usa el bot). Crea ahí tu `.env` o exporta la
+variable en el entorno antes de ejecutarlo.
 
 ### 3.4 Configuración por chat
 
@@ -290,7 +290,7 @@ variable en el entorno o ajusta esa ruta antes de ejecutarlo.
 
 | Clave | Validación | Persistencia |
 |---|---|---|
-| `model` | `resolve_model()` (alias o `provider/model`) | `settings.model` |
+| `model` | `resolve_model()` (alias o `provider/model`) | clave superior `model` |
 | `timeout` | entero en `(0, 86400]` | `settings.timeout` |
 | `workdir` | ruta tal cual | `settings.workdir` |
 | `provider` | string libre; si no está registrado, el prompt falla al crear el backend | `settings.provider` |
@@ -298,9 +298,8 @@ variable en el entorno o ajusta esa ruta antes de ejecutarlo.
 Los settings se guardan en `sessions.json` bajo la clave `settings` de cada
 conversación. **Importante:** el modelo que usa la ejecución se lee con
 `SessionStore.get_model()` desde la clave **superior** `model`; `/config model`
-escribe en `settings.model` y, en este HEAD, no cambia el modelo efectivo del
-prompt. Usa `/model <alias>` para eso. `/config` tampoco refleja
-necesariamente el modelo fijado con `/model`.
+escribe en esa misma clave superior (igual que `/model`) y **sí** cambia el
+modelo efectivo del prompt. `/config` y `/model` comparten el mismo valor.
 
 ---
 
@@ -411,7 +410,7 @@ reset_session(conversation_id)
 |---|---|
 | `active` | Nombre de la sesión activa |
 | `model` | Modelo efectivo de la conversación (lo usa `PromptService`) |
-| `settings` | Settings por chat de `/config` y `/wdir` (`model`, `timeout`, `workdir`, `provider`) |
+| `settings` | Settings por chat de `/config` y `/wdir` (`timeout`, `workdir`, `provider`); `model` vive en la clave superior |
 | `id` | ID real de OpenCode (`ses_...`) o `null` |
 | `title` | Título legible |
 | `created` / `last_used` | ISO 8601 UTC |
@@ -555,7 +554,7 @@ GUI muestra un aviso para reintentar en el próximo mensaje.
 
 ```text
 /config                    # muestra model, timeout, workdir, provider
-/config model pro          # escribe settings.model (no cambia el prompt; usa /model)
+/config model pro          # escribe la clave superior model (igual que /model)
 /config timeout 900        # entero (0, 86400]
 /config workdir <ruta>
 /config provider opencode
@@ -681,9 +680,10 @@ script).
 
 ### 9.5 Empaquetado
 
-`pyproject.toml` declara el extra `gui` y los paquetes del core, pero **no**
-incluye `flet_app` en `[tool.setuptools].packages`. En modo editable desde la
-raíz funciona; para una instalación no editable habría que agregarlo.
+`pyproject.toml` declara el extra `gui` y los paquetes del core, e **incluye**
+`flet_app` en `[tool.setuptools].packages` junto con sus subpaquetes
+`flet_app.components`, `flet_app.core` y `flet_app.screens`. Funciona tanto en
+modo editable como en una instalación no editable.
 
 ---
 
@@ -757,7 +757,7 @@ los registros propaguen a los handlers de `setup_logger()`.
 
 ### 12.1 Estado actual
 
-En `main` (HEAD `79a7eb1`) la suite recolecta **719 tests** con
+En `main` (HEAD `862b8c0`) la suite recolecta **714 tests** con
 `pytest --collect-only -q`.
 
 ```bash
@@ -896,14 +896,14 @@ Instala GitHub CLI y ejecuta `gh auth login`. En Windows, `launcher.bat` agrega
 
 ### `get_chat_id.py` no ve el token
 
-El script lee `.env` del directorio **padre** del repo. Exporta
-`TELEGRAM_BOT_TOKEN` o ajusta `ENV_PATH`.
+El script lee `.env` de la **raíz** del repo. Exporta
+`TELEGRAM_BOT_TOKEN` o crea el `.env` en la raíz.
 
 ### La GUI de Flet no arranca
 
-Instala el extra: `pip install -e ".[gui]"`. En modo no editable, `flet_app`
-no está declarado en `[tool.setuptools].packages`; ejecuta desde la raíz o
-agrega el paquete.
+Instala el extra: `pip install -e ".[gui]"`. `flet_app` y sus subpaquetes
+están declarados en `[tool.setuptools].packages`, así que también funciona en
+una instalación no editable.
 
 ### `opencode session list` no parsea
 
@@ -1005,7 +1005,7 @@ Sdd-Orchestrator-Telegram-Bot/
 │   ├── bot_port.py                 # Protocol de transporte
 │   ├── chat_view.py                # ChatView + progreso
 │   ├── message_sender.py           # MarkdownV2 + fallback + split
-│   ├── formatting.py               # Escapes, tablas, chunks
+│   ├── formatting.py               # Troceo de mensajes (chunks)
 │   ├── permission_presenter.py     # Botones inline
 │   ├── gate.py                     # TelegramGate
 │   ├── keys.py                     # telegram:{id}
@@ -1037,7 +1037,7 @@ Sdd-Orchestrator-Telegram-Bot/
 ├── opencode/                       # Cliente CLI/DB de OpenCode
 ├── persistence/sessions.py         # DAL de sessions.json
 ├── utils/                          # logging, time_formatting
-├── tests/                          # 719 tests
+├── tests/                          # 714 tests
 ├── docs/adr/                       # ADR 0001, 0002
 └── .github/workflows/ci.yml        # CI matrix 3.11–3.13
 ```
@@ -1056,4 +1056,4 @@ actuales:
 ---
 
 *Documentación técnica del repositorio Sdd-Orchestrator-Telegram-Bot. Estado:
-HEAD `79a7eb1`, rama `main`.*
+HEAD `862b8c0`, rama `main`.*
