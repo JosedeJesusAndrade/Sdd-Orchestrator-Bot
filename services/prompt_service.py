@@ -51,7 +51,7 @@ from utils.logging import get_module_logger, log_exception
 if TYPE_CHECKING:
     from services.ai_backend import AIBackend
     from services.ai_provider_factory import ProviderFactoryPort
-    from services.chat_view import ChatView, ConversationId, ProgressHandle
+    from services.chat_view import ChatView, ConversationKey, ProgressHandle
     from services.session_store import SessionInfo, SessionStorePort
 
 logger = get_module_logger(__name__)
@@ -86,23 +86,23 @@ class PromptService:
         self._factory = provider_factory
 
         # Per-conversation running tasks
-        self._running: dict[ConversationId, asyncio.Task[Any]] = {}
+        self._running: dict[ConversationKey, asyncio.Task[Any]] = {}
         # Per-conversation cancel flags (set by cancel() before process terminates)
-        self._cancel: set[ConversationId] = set()
+        self._cancel: set[ConversationKey] = set()
         # Per-conversation backend instances (F3). One conversation = one
         # backend = one process, so cancel(cid) can only ever touch that
         # conversation's process. Lifetime == the running prompt: created in
         # _execute_prompt, dropped in execute()'s finally. Bounded by the
         # number of *concurrently running* prompts (not by total chats).
-        self._backends: dict[ConversationId, AIBackend] = {}
+        self._backends: dict[ConversationKey, AIBackend] = {}
 
     # ── Public API ──────────────────────────────────────────────────
 
-    def is_running(self, conversation_id: ConversationId) -> bool:
+    def is_running(self, conversation_id: ConversationKey) -> bool:
         """Check if a prompt is currently executing for this chat."""
         return conversation_id in self._running
 
-    def cancel(self, conversation_id: ConversationId) -> bool:
+    def cancel(self, conversation_id: ConversationKey) -> bool:
         """Request cancellation of a running prompt.
 
         Returns True if there was a prompt to cancel, False otherwise.
@@ -130,7 +130,7 @@ class PromptService:
 
     async def execute(
         self,
-        conversation_id: ConversationId,
+        conversation_id: ConversationKey,
         prompt_text: str,
         view: ChatView,
     ) -> str:
@@ -153,12 +153,12 @@ class PromptService:
         Raises:
             PromptAlreadyRunningError: if a prompt is already running.
         """
-        from utils.logging import mask_chat_id
+        from utils.logging import mask_conversation_key
 
         if conversation_id in self._running:
             raise PromptAlreadyRunningError(f"Chat {conversation_id} already has a running prompt")
 
-        masked_cid = mask_chat_id(conversation_id)
+        masked_cid = mask_conversation_key(conversation_id)
         start_time = time.monotonic()
         model = await self._store.get_model(conversation_id)
 
@@ -267,7 +267,7 @@ class PromptService:
 
     # ── Internal: AI backend execution ──────────────────────────────
 
-    async def _create_backend(self, conversation_id: ConversationId) -> AIBackend:
+    async def _create_backend(self, conversation_id: ConversationKey) -> AIBackend:
         """Resolve the per-chat provider and build a fresh backend instance.
 
         F3: one backend instance per conversation. Stored BEFORE the cancel
@@ -282,7 +282,7 @@ class PromptService:
 
     async def _execute_prompt(
         self,
-        conversation_id: ConversationId,
+        conversation_id: ConversationKey,
         prompt: str,
         session: SessionInfo | None,
         model: str,
@@ -350,7 +350,7 @@ class PromptService:
 
     async def _deliver_response(
         self,
-        conversation_id: ConversationId,
+        conversation_id: ConversationKey,
         result: dict[str, Any],
         handle: ProgressHandle,
         view: ChatView,
@@ -401,13 +401,13 @@ class PromptService:
         # delivered response is a failure for status purposes.
         response_sent = await view.send(response)
 
-        from utils.logging import mask_chat_id
+        from utils.logging import mask_conversation_key
 
         logger.info(
             "OpenCode response delivered",
             extra={
                 "event": "opencode_response_delivered",
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
                 "response_length": len(response),
                 "delivered": response_sent,
             },
@@ -455,7 +455,7 @@ class PromptService:
 
     async def _persist_session_id(
         self,
-        conversation_id: ConversationId,
+        conversation_id: ConversationKey,
         session_id: str | None,
     ) -> None:
         """Persist the real OpenCode session ID so the next prompt continues it.
@@ -470,13 +470,13 @@ class PromptService:
         active = await self._store.get_active_session(conversation_id)
         if active is not None and not active.real_id:
             await self._store.update_session_id(conversation_id, session_id)
-            from utils.logging import mask_chat_id
+            from utils.logging import mask_conversation_key
 
             logger.info(
                 "Captured OpenCode session ID",
                 extra={
                     "event": "session_id_captured",
-                    "chat_id_masked": mask_chat_id(conversation_id),
+                    "chat_id_masked": mask_conversation_key(conversation_id),
                     "session_name": active.name,
                     "session_id": session_id,
                 },
@@ -484,14 +484,14 @@ class PromptService:
 
     # ── Internal: logging ───────────────────────────────────────────
 
-    def _log_prompt(self, conversation_id: ConversationId, prompt: str, model: str) -> None:
+    def _log_prompt(self, conversation_id: ConversationKey, prompt: str, model: str) -> None:
         """Log the incoming prompt (with credential redaction).
 
         Phase 2 logging: structured `event=prompt_received` with chat_id_masked,
         model, prompt_length, and (truncated) preview. Credentials in the
         prompt are replaced with `[REDACTED]` before logging.
         """
-        from utils.logging import mask_chat_id
+        from utils.logging import mask_conversation_key
 
         truncated = prompt[:100] + "..." if len(prompt) > 100 else prompt
         safe_prompt = truncated
@@ -503,7 +503,7 @@ class PromptService:
             "Prompt received",
             extra={
                 "event": "prompt_received",
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
                 "model": model,
                 "prompt_length": len(prompt),
                 "preview": safe_prompt,

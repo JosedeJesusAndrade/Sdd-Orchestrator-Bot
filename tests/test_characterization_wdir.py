@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 import core_config
+from frontends.telegram.keys import telegram_key
 from handlers.ci import wdir_command
 from tests.handler_fakes import (
     CHAT_ID,
@@ -153,7 +154,7 @@ async def test_switch_by_alias_persists_workdir(root: Path) -> None:
 
     sender = await _run(store, ["beta"])
 
-    assert store.set_calls == [(CHAT_ID, "workdir", str(beta))]
+    assert store.set_calls == [(telegram_key(CHAT_ID), "workdir", str(beta))]
     assert "Workdir cambiado" in sender.plain_texts[-1]
 
 

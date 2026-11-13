@@ -35,10 +35,11 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-# A conversation is identified by the frontend, not the core.
-# Telegram supplies its int chat id; a Flet frontend may supply a
-# synthetic ``int | str`` id. The core treats it as opaque.
-ConversationId = int | str
+from services.conversation import ConversationKey
+
+# Re-exported for callers that think in terms of the ChatView seam; the
+# canonical definition (and helpers) live in ``services.conversation``.
+__all__ = ["ChatView", "ConversationKey", "ProgressHandle"]
 
 
 @runtime_checkable

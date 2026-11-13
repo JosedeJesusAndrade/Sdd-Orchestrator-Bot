@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from services.chat_view import ConversationId
+from services.conversation import ConversationKey
 from services.frontend_gate import AllowAllGate, FrontendGate
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,15 +25,24 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ── v1 policy ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("conversation_id", [123, "flet", ""])
-def test_allow_all_gate_allows_any_conversation_id(conversation_id: ConversationId) -> None:
+@pytest.mark.parametrize(
+    "conversation_id",
+    [
+        ConversationKey("telegram:123"),
+        ConversationKey("flet:local"),
+        ConversationKey(""),
+    ],
+)
+def test_allow_all_gate_allows_any_conversation_key(
+    conversation_id: ConversationKey,
+) -> None:
     assert AllowAllGate().is_allowed(conversation_id) is True
 
 
 # ── Protocol conformance ──────────────────────────────────────────────
 
 
-def _accepts_gate(gate: FrontendGate, conversation_id: ConversationId) -> bool:
+def _accepts_gate(gate: FrontendGate, conversation_id: ConversationKey) -> bool:
     """Typing-level conformance: mypy requires the Protocol shape here."""
     return gate.is_allowed(conversation_id)
 
@@ -41,7 +50,7 @@ def _accepts_gate(gate: FrontendGate, conversation_id: ConversationId) -> bool:
 def test_allow_all_gate_satisfies_frontend_gate_protocol() -> None:
     gate = AllowAllGate()
 
-    assert _accepts_gate(gate, "flet") is True
+    assert _accepts_gate(gate, ConversationKey("flet:local")) is True
     assert isinstance(gate, FrontendGate)
 
 

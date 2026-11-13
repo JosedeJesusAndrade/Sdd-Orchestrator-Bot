@@ -148,6 +148,24 @@ def mask_chat_id(chat_id: int | str) -> str:
     return s[:2] + "*" * (len(s) - 4) + s[-2:]
 
 
+def mask_conversation_key(key: str) -> str:
+    """Mask an opaque conversation key, keeping its namespace visible.
+
+    The namespace (``telegram`` / ``flet``) is not PII and makes logs
+    diagnosable; only the frontend-local part is redacted::
+
+        telegram:8664220427 → telegram:86******27
+        flet:local         → flet:lo*al
+
+    A key without a namespace falls back to plain ``mask_chat_id`` so raw
+    legacy ids remain redacted.
+    """
+    prefix, separator, local = str(key).partition(":")
+    if not separator:
+        return mask_chat_id(str(key))
+    return f"{prefix}:{mask_chat_id(local)}"
+
+
 # ── KeyValueFormatter ─────────────────────────────────────────────────────
 
 # Standard LogRecord attributes — copied from the Python logging module docs

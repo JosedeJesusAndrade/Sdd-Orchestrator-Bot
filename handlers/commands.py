@@ -20,6 +20,7 @@ from telegram.ext import ContextTypes
 from core_config import DEFAULT_SESSION_NAME, resolve_model
 from frontends.telegram.chat_view import TelegramChatView
 from frontends.telegram.container import AppContainer
+from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat, require_message
 from locales import get_strings
@@ -82,9 +83,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show current session status via StatusService (presentation only)."""
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
 
-    snapshot = await container.status_service.snapshot(chat_id)
+    snapshot = await container.status_service.snapshot(key)
 
     # Build session info
     if snapshot.session_name is not None:
@@ -141,11 +143,12 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Reset the active session's OpenCode ID — next prompt starts fresh."""
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
 
-    await container.session_store.reset_session(chat_id)
+    await container.session_store.reset_session(key)
 
-    active = await container.session_store.get_active_session(chat_id)
+    active = await container.session_store.get_active_session(key)
     active_name = active.name if active else DEFAULT_SESSION_NAME
 
     # Note: session_store.reset_session() already emits event=session_reset.
@@ -168,17 +171,18 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """View or change the AI model using SessionStore."""
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     args = context.args
     container = _get_container(context)
     strings = get_strings()
 
     if not args:
-        model = await container.session_store.get_model(chat_id)
+        model = await container.session_store.get_model(key)
         await msg.reply_text(strings.MODEL_CURRENT.format(model=model))
         return
 
     model_value = resolve_model(args[0].lower())
-    await container.session_store.set_model(chat_id, model_value)
+    await container.session_store.set_model(key, model_value)
     await msg.reply_text(strings.MODEL_CHANGED.format(model=model_value))
 
 
@@ -187,14 +191,15 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Cancel a running prompt using PromptService."""
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
     strings = get_strings()
 
-    if not container.prompt_service.is_running(chat_id):
+    if not container.prompt_service.is_running(key):
         await msg.reply_text(strings.CANCEL_NO_PROMPT)
         return
 
-    cancelled = container.prompt_service.cancel(chat_id)
+    cancelled = container.prompt_service.cancel(key)
     if cancelled:
         logger.info(
             "Prompt cancelled by user",
@@ -213,6 +218,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Execute a prompt via /open <text> using PromptService."""
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
     strings = get_strings()
 
@@ -223,7 +229,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         await container.prompt_service.execute(
-            conversation_id=chat_id,
+            conversation_id=key,
             prompt_text=prompt,
             view=TelegramChatView(container.message_sender, chat_id),
         )
@@ -235,13 +241,14 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = require_message(update)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     args = context.args
     container = _get_container(context)
 
     strings = get_strings()
 
     if not args:
-        settings = await container.settings_service.get(chat_id)
+        settings = await container.settings_service.get(key)
         lines = [strings.CONFIG_HEADER + "\n"]
         lines.append(f"  modelo: `{settings.model}`")
         lines.append(f"  timeout: `{settings.timeout}s`")
@@ -250,24 +257,24 @@ async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await msg.reply_text("\n".join(lines))
         return
 
-    key = args[0].lower()
+    setting = args[0].lower()
     try:
         if len(args) < 2:
-            value = await container.settings_service.get_value(chat_id, key)
-            await msg.reply_text(f"{key} = `{value}`")
+            value = await container.settings_service.get_value(key, setting)
+            await msg.reply_text(f"{setting} = `{value}`")
             return
-        value = await container.settings_service.set(chat_id, key, args[1])
+        value = await container.settings_service.set(key, setting, args[1])
     except UnknownSettingError:
-        await msg.reply_text(strings.CONFIG_UNKNOWN_KEY.format(key=key))
+        await msg.reply_text(strings.CONFIG_UNKNOWN_KEY.format(key=setting))
         return
     except InvalidSettingValueError:
         await msg.reply_text(strings.CONFIG_INVALID_TIMEOUT)
         return
 
-    if key == "timeout":
+    if setting == "timeout":
         await msg.reply_text(strings.CONFIG_TIMEOUT_SET.format(value=value))
     else:
-        await msg.reply_text(strings.CONFIG_SET.format(key=key, value=value))
+        await msg.reply_text(strings.CONFIG_SET.format(key=setting, value=value))
 
 
 @authorized
@@ -275,11 +282,10 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Health check: /health — versión, uptime, conectividad, sesiones."""
     container = _get_container(context)
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     sender = container.message_sender
 
-    snapshot = await container.health_service.snapshot(
-        chat_id, connectivity_probe=container.bot_port
-    )
+    snapshot = await container.health_service.snapshot(key, connectivity_probe=container.bot_port)
 
     h, m = divmod(snapshot.uptime_seconds, 3600)
     m, s = divmod(m, 60)

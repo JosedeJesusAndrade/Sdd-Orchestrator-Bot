@@ -32,10 +32,10 @@ from services.session_store import (
     SessionInfo,
     SessionStore,
 )
-from utils.logging import get_module_logger, log_exception, mask_chat_id
+from utils.logging import get_module_logger, log_exception, mask_conversation_key
 
 if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+    from services.conversation import ConversationKey
 
 logger = get_module_logger(__name__)
 
@@ -129,19 +129,19 @@ class SessionService:
         self._store = session_store
         self._catalog = catalog
 
-    async def create(self, conversation_id: ConversationId, name: str) -> SessionInfo:
+    async def create(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Create a named session and invalidate the discovery cache."""
         session = await self._store.create_session(conversation_id, name)
         invalidate_opencode_sessions_cache()
         return session
 
-    async def switch(self, conversation_id: ConversationId, name: str) -> SessionInfo:
+    async def switch(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Switch the active session and invalidate the discovery cache."""
         session = await self._store.switch_session(conversation_id, name)
         invalidate_opencode_sessions_cache()
         return session
 
-    async def list_with_discovered(self, conversation_id: ConversationId) -> SessionListSnapshot:
+    async def list_with_discovered(self, conversation_id: ConversationKey) -> SessionListSnapshot:
         """Merge bot sessions with OpenCode-discovered, not-yet-adopted ones."""
         bot_sessions = await self._store.list_sessions(conversation_id)
         bot_ids = {s.real_id for s in bot_sessions if s.real_id}
@@ -167,7 +167,7 @@ class SessionService:
         ]
         return SessionListSnapshot(sessions=bot_sessions, unadopted=unadopted)
 
-    async def discover(self, conversation_id: ConversationId) -> list[DiscoveredSession]:
+    async def discover(self, conversation_id: ConversationKey) -> list[DiscoveredSession]:
         """Return every OpenCode session annotated with its adoption status."""
         oc_sessions = await fetch_opencode_sessions()
         sessions = await self._store.list_sessions(conversation_id)
@@ -192,7 +192,7 @@ class SessionService:
             )
         return discovered
 
-    async def delete(self, conversation_id: ConversationId, name: str) -> str | None:
+    async def delete(self, conversation_id: ConversationKey, name: str) -> str | None:
         """Delete a stored session and clean it up in OpenCode if it had an ID."""
         real_id = await self._store.delete_session(conversation_id, name)
         invalidate_opencode_sessions_cache()
@@ -211,7 +211,7 @@ class SessionService:
                 logger.info(
                     "Deleted OpenCode session %s for chat %s",
                     real_id,
-                    mask_chat_id(conversation_id),
+                    mask_conversation_key(conversation_id),
                 )
             except Exception as e:
                 logger.warning(
@@ -219,7 +219,7 @@ class SessionService:
                     extra={
                         "event": "oc_session_delete_failed",
                         "real_id": real_id,
-                        "chat_id": conversation_id,
+                        "chat_id_masked": mask_conversation_key(conversation_id),
                         "error_type": type(e).__name__,
                     },
                     exc_info=True,
@@ -261,7 +261,7 @@ class SessionService:
             )
         return data
 
-    async def adopt(self, conversation_id: ConversationId, real_id: str, name: str) -> None:
+    async def adopt(self, conversation_id: ConversationKey, real_id: str, name: str) -> None:
         """Adopt an existing OpenCode session under a bot-managed name.
 
         Raises:
@@ -298,5 +298,5 @@ class SessionService:
             "Session '%s' adopted (%s) for %s",
             name,
             real_id,
-            mask_chat_id(conversation_id),
+            mask_conversation_key(conversation_id),
         )

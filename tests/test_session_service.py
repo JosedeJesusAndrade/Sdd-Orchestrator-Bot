@@ -22,6 +22,7 @@ from services.session_service import (
     SessionService,
 )
 from services.session_store import SessionExistsError, SessionInfo, SessionStore
+from tests.conversation_keys import conv
 
 
 def _session(
@@ -142,7 +143,7 @@ async def test_list_with_discovered_merges_stored_and_discovered(
         ],
     )
 
-    snapshot = await _service(store).list_with_discovered(42)
+    snapshot = await _service(store).list_with_discovered(conv(42))
 
     assert isinstance(snapshot, SessionListSnapshot)
     assert [s.name for s in snapshot.sessions] == ["mine", "fresh"]
@@ -156,7 +157,7 @@ async def test_list_with_discovered_without_discovery(monkeypatch: pytest.Monkey
     store = FakeStore([_session("mine", "ses_1")])
     _patch_fetch(monkeypatch, [])
 
-    snapshot = await _service(store).list_with_discovered(42)
+    snapshot = await _service(store).list_with_discovered(conv(42))
 
     assert [s.name for s in snapshot.sessions] == ["mine"]
     assert snapshot.unadopted == []
@@ -172,7 +173,7 @@ async def test_list_with_discovered_swallows_discovery_failure(
 
     monkeypatch.setattr("services.session_service.fetch_opencode_sessions", failing_fetch)
 
-    snapshot = await _service(store).list_with_discovered(42)
+    snapshot = await _service(store).list_with_discovered(conv(42))
 
     assert [s.name for s in snapshot.sessions] == ["mine"]
     assert snapshot.unadopted == []
@@ -191,7 +192,7 @@ async def test_discover_annotates_adoption_status(monkeypatch: pytest.MonkeyPatc
         ],
     )
 
-    discovered = await _service(store).discover(42)
+    discovered = await _service(store).discover(conv(42))
 
     assert discovered == [
         DiscoveredSession(
@@ -210,7 +211,7 @@ async def test_discover_returns_empty_without_opencode_sessions(
 ) -> None:
     _patch_fetch(monkeypatch, [])
 
-    assert await _service(FakeStore()).discover(42) == []
+    assert await _service(FakeStore()).discover(conv(42)) == []
 
 
 # ── adopt ──────────────────────────────────────────────────────────────
@@ -222,11 +223,11 @@ async def test_adopt_valid_session_updates_store_and_invalidates_cache(
     store = FakeStore()
     _patch_fetch(monkeypatch, [{"id": "ses_abc", "title": "Adopted title"}])
 
-    await _service(store).adopt(42, "ses_abc", "mine")
+    await _service(store).adopt(conv(42), "ses_abc", "mine")
 
-    assert store.created == [(42, "mine")]
-    assert store.updated_ids == [(42, "ses_abc")]
-    assert store.updated_titles == [(42, "mine", "Adopted title")]
+    assert store.created == [(conv(42), "mine")]
+    assert store.updated_ids == [(conv(42), "ses_abc")]
+    assert store.updated_titles == [(conv(42), "mine", "Adopted title")]
     assert invalidations == [True]
 
 
@@ -237,7 +238,7 @@ async def test_adopt_unknown_id_raises_without_store_mutation(
     fetch_calls = _patch_fetch(monkeypatch, [])
 
     with pytest.raises(SessionNotDiscoveredError) as exc:
-        await _service(store).adopt(42, "ses_missing", "mine")
+        await _service(store).adopt(conv(42), "ses_missing", "mine")
 
     assert exc.value.real_id == "ses_missing"
     assert fetch_calls == [True]
@@ -253,7 +254,7 @@ async def test_adopt_invalid_name_raises_before_discovery(
     fetch_calls = _patch_fetch(monkeypatch, [{"id": "ses_abc", "title": "t"}])
 
     with pytest.raises(InvalidSessionNameError) as exc:
-        await _service(store).adopt(42, "ses_abc", name)
+        await _service(store).adopt(conv(42), "ses_abc", name)
 
     assert exc.value.name == name
     assert fetch_calls == []
@@ -267,7 +268,7 @@ async def test_adopt_duplicate_name_raises_without_mutation(
     _patch_fetch(monkeypatch, [{"id": "ses_new", "title": "New"}])
 
     with pytest.raises(SessionExistsError):
-        await _service(store).adopt(42, "ses_new", "mine")
+        await _service(store).adopt(conv(42), "ses_new", "mine")
 
     assert store.created == []
     assert store.updated_ids == []
@@ -283,13 +284,13 @@ async def test_adopt_with_catalog_accepts_sessions_outside_the_cli_list(
     fetch_calls = _patch_fetch(monkeypatch, [])
 
     service = SessionService(cast(SessionStore, store), catalog=catalog)
-    await service.adopt(42, "ses_outside", "old-one")
+    await service.adopt(conv(42), "ses_outside", "old-one")
 
     assert catalog.calls == ["ses_outside"]
     assert fetch_calls == []
-    assert store.created == [(42, "old-one")]
-    assert store.updated_ids == [(42, "ses_outside")]
-    assert store.updated_titles == [(42, "old-one", "Older session")]
+    assert store.created == [(conv(42), "old-one")]
+    assert store.updated_ids == [(conv(42), "ses_outside")]
+    assert store.updated_titles == [(conv(42), "old-one", "Older session")]
     assert invalidations == [True]
 
 
@@ -302,7 +303,7 @@ async def test_adopt_with_catalog_unknown_id_raises_without_mutation(
 
     service = SessionService(cast(SessionStore, store), catalog=catalog)
     with pytest.raises(SessionNotDiscoveredError) as exc:
-        await service.adopt(42, "ses_missing", "mine")
+        await service.adopt(conv(42), "ses_missing", "mine")
 
     assert exc.value.real_id == "ses_missing"
     assert catalog.calls == ["ses_missing"]
@@ -317,11 +318,11 @@ async def test_adopt_without_catalog_keeps_the_cli_validation(
     store = FakeStore()
     fetch_calls = _patch_fetch(monkeypatch, [{"id": "ses_from_cli", "title": "From CLI"}])
 
-    await _service(store).adopt(42, "ses_from_cli", "mine")
+    await _service(store).adopt(conv(42), "ses_from_cli", "mine")
 
     assert fetch_calls == [True]
-    assert store.created == [(42, "mine")]
-    assert store.updated_titles == [(42, "mine", "From CLI")]
+    assert store.created == [(conv(42), "mine")]
+    assert store.updated_titles == [(conv(42), "mine", "From CLI")]
 
 
 # ── delete ─────────────────────────────────────────────────────────────
@@ -344,10 +345,10 @@ async def test_delete_removes_session_and_cleans_up_opencode(
 
     monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", fake_exec)
 
-    result = await _service(store).delete(42, "mine")
+    result = await _service(store).delete(conv(42), "mine")
 
     assert result == "ses_1"
-    assert store.deleted == [(42, "mine")]
+    assert store.deleted == [(conv(42), "mine")]
     assert store.sessions == []
     assert invalidations == [True]
     assert len(exec_calls) == 1
@@ -368,10 +369,10 @@ async def test_delete_without_real_id_skips_opencode(
 
     monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", fake_exec)
 
-    result = await _service(store).delete(42, "mine")
+    result = await _service(store).delete(conv(42), "mine")
 
     assert result is None
-    assert store.deleted == [(42, "mine")]
+    assert store.deleted == [(conv(42), "mine")]
     assert exec_calls == []
     assert invalidations == [True]
 
@@ -387,10 +388,10 @@ async def test_delete_swallows_opencode_cleanup_failure(
 
     monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", failing_exec)
 
-    result = await _service(store).delete(42, "mine")
+    result = await _service(store).delete(conv(42), "mine")
 
     assert result == "ses_1"
-    assert store.deleted == [(42, "mine")]
+    assert store.deleted == [(conv(42), "mine")]
     assert invalidations == [True]
 
 
@@ -516,18 +517,18 @@ async def test_enrich_swallows_db_errors_at_warning(monkeypatch: pytest.MonkeyPa
 async def test_create_delegates_and_invalidates_cache(invalidations: list[bool]) -> None:
     store = FakeStore()
 
-    session = await _service(store).create(42, "new-session")
+    session = await _service(store).create(conv(42), "new-session")
 
     assert session.name == "new-session"
-    assert store.created == [(42, "new-session")]
+    assert store.created == [(conv(42), "new-session")]
     assert invalidations == [True]
 
 
 async def test_switch_delegates_and_invalidates_cache(invalidations: list[bool]) -> None:
     store = FakeStore([_session("mine", "ses_1"), _session("other", "ses_2")])
 
-    session = await _service(store).switch(42, "other")
+    session = await _service(store).switch(conv(42), "other")
 
     assert session.name == "other"
-    assert store.switched == [(42, "other")]
+    assert store.switched == [(conv(42), "other")]
     assert invalidations == [True]

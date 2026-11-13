@@ -14,6 +14,7 @@ from services.agent_sessions import (
 from services.conversations_service import ConversationsService
 from services.session_service import SessionNotDiscoveredError, SessionService
 from services.session_store import SessionInfo, SessionStore
+from tests.conversation_keys import conv
 
 
 def _summary(real_id: str, title: str = "Title", updated: int = 100) -> ConversationSummary:
@@ -124,7 +125,7 @@ async def test_list_merges_active_and_adopted_state() -> None:
         ]
     )
 
-    result = await _service(agent, store).list_conversations(42)
+    result = await _service(agent, store).list_conversations(conv(42))
 
     assert [summary.real_id for summary in result] == ["ses_1", "ses_2"]
     assert result[0].adopted_name == "mine"
@@ -137,7 +138,7 @@ async def test_list_only_returns_conversations_visible_in_the_agent() -> None:
     agent = FakeAgentSessions([_summary("ses_1")])
     store = FakeStore([_session("only-in-store", "ses_2", is_active=True)])
 
-    result = await _service(agent, store).list_conversations(42)
+    result = await _service(agent, store).list_conversations(conv(42))
 
     assert [summary.real_id for summary in result] == ["ses_1"]
     assert result[0].is_active is False
@@ -146,7 +147,7 @@ async def test_list_only_returns_conversations_visible_in_the_agent() -> None:
 async def test_list_does_not_use_the_directory_argument() -> None:
     agent = FakeAgentSessions([])
 
-    await _service(agent, FakeStore()).list_conversations(42)
+    await _service(agent, FakeStore()).list_conversations(conv(42))
 
     assert agent.list_calls == [{"directory": None, "limit": 50}]
 
@@ -159,10 +160,10 @@ async def test_open_switches_when_the_real_id_is_already_adopted() -> None:
     agent = FakeAgentSessions()
     catalog = FakeCatalog([_summary("ses_1", title="Ignored")])
 
-    name = await _service(agent, store, catalog=catalog).open(42, "ses_1", "Ignored")
+    name = await _service(agent, store, catalog=catalog).open(conv(42), "ses_1", "Ignored")
 
     assert name == "mine"
-    assert store.switched == [(42, "mine")]
+    assert store.switched == [(conv(42), "mine")]
     assert store.created == []
     assert catalog.calls == []
 
@@ -173,13 +174,13 @@ async def test_open_adopts_with_a_slug_when_new() -> None:
     catalog = FakeCatalog([_summary("ses_new", title="Saludo desde la app Flet")])
 
     name = await _service(agent, store, catalog=catalog).open(
-        42, "ses_new", "Saludo desde la app Flet"
+        conv(42), "ses_new", "Saludo desde la app Flet"
     )
 
     assert name == "saludo-desde-la-app-flet"
-    assert store.created == [(42, name)]
-    assert store.updated_ids == [(42, "ses_new")]
-    assert store.updated_titles == [(42, name, "Saludo desde la app Flet")]
+    assert store.created == [(conv(42), name)]
+    assert store.updated_ids == [(conv(42), "ses_new")]
+    assert store.updated_titles == [(conv(42), name, "Saludo desde la app Flet")]
     assert catalog.calls == ["ses_new"]
 
 
@@ -195,7 +196,9 @@ async def test_open_slugifies_titles(title: str, expected: str) -> None:
     store = FakeStore()
     catalog = FakeCatalog([_summary("ses_new", title=title)])
 
-    name = await _service(FakeAgentSessions(), store, catalog=catalog).open(42, "ses_new", title)
+    name = await _service(FakeAgentSessions(), store, catalog=catalog).open(
+        conv(42), "ses_new", title
+    )
 
     assert name == expected
 
@@ -205,7 +208,7 @@ async def test_open_falls_back_to_the_id_when_the_title_has_no_ascii() -> None:
     catalog = FakeCatalog([_summary("ses_ABCDEF", title="¡¡!!")])
 
     name = await _service(FakeAgentSessions(), store, catalog=catalog).open(
-        42, "ses_ABCDEF", "¡¡!!"
+        conv(42), "ses_ABCDEF", "¡¡!!"
     )
 
     assert name == "ses-abcdef"
@@ -220,10 +223,12 @@ async def test_open_resolves_slug_collisions() -> None:
     )
     catalog = FakeCatalog([_summary("ses_c", title="Saludo")])
 
-    name = await _service(FakeAgentSessions(), store, catalog=catalog).open(42, "ses_c", "Saludo")
+    name = await _service(FakeAgentSessions(), store, catalog=catalog).open(
+        conv(42), "ses_c", "Saludo"
+    )
 
     assert name == "saludo-3"
-    assert store.created == [(42, "saludo-3")]
+    assert store.created == [(conv(42), "saludo-3")]
 
 
 async def test_open_rejects_invalid_real_ids_before_touching_state() -> None:
@@ -231,7 +236,9 @@ async def test_open_rejects_invalid_real_ids_before_touching_state() -> None:
     catalog = FakeCatalog([])
 
     with pytest.raises(InvalidSessionIdError):
-        await _service(FakeAgentSessions(), store, catalog=catalog).open(42, "bad-id", "Title")
+        await _service(FakeAgentSessions(), store, catalog=catalog).open(
+            conv(42), "bad-id", "Title"
+        )
 
     assert store.created == []
     assert store.switched == []
@@ -243,7 +250,9 @@ async def test_open_propagates_unknown_catalog_ids() -> None:
     catalog = FakeCatalog([])
 
     with pytest.raises(SessionNotDiscoveredError):
-        await _service(FakeAgentSessions(), store, catalog=catalog).open(42, "ses_missing", "Title")
+        await _service(FakeAgentSessions(), store, catalog=catalog).open(
+            conv(42), "ses_missing", "Title"
+        )
 
     assert store.created == []
 

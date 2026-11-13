@@ -23,7 +23,7 @@ from services.session_store import SessionStore
 from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+    from services.conversation import ConversationKey
 
 logger = get_module_logger(__name__)
 
@@ -56,7 +56,7 @@ class StatusService:
         self._store = session_store
         self._start_time = start_time
 
-    async def snapshot(self, conversation_id: ConversationId) -> StatusSnapshot:
+    async def snapshot(self, conversation_id: ConversationKey) -> StatusSnapshot:
         """Return a raw status snapshot for a conversation."""
         session = await self._store.get_active_session(conversation_id)
         model = await self._store.get_model(conversation_id)

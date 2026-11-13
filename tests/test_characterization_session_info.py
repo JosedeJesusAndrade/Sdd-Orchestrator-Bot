@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from frontends.telegram.keys import telegram_key
 from handlers.sessions import session_command
 from services.session_store import SessionInfo
 from tests.handler_fakes import (
@@ -263,4 +264,4 @@ async def test_info_includes_the_session_title_and_prompt_count() -> None:
     text = msg.reply_texts[-1]
     assert "Título: My title" in text
     assert "Prompts: 9" in text
-    assert store.list_calls == [CHAT_ID]
+    assert store.list_calls == [telegram_key(CHAT_ID)]

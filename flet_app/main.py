@@ -34,6 +34,7 @@ from flet_app.core.design_system import DS  # noqa: E402
 from flet_app.core.navigation import ScreenHost  # noqa: E402
 from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
+from flet_app.keys import flet_key  # noqa: E402
 from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
 from flet_app.screens.conversations_screen import ConversationsScreen  # noqa: E402
 from services.agent_sessions import ConversationSummary, Message  # noqa: E402
@@ -46,7 +47,7 @@ from services.server_lifecycle import (  # noqa: E402
     warm_up_server,
 )
 
-CONVERSATION_ID = "flet"
+CONVERSATION_ID = flet_key()
 
 WARM_UP_FAILED_MESSAGE = (
     "⚠️ No se pudo preparar el servidor OpenCode. Revisa la configuración del "

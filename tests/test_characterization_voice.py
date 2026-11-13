@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from frontends.telegram.chat_view import TelegramChatView
+from frontends.telegram.keys import telegram_key
 from handlers import messages
 from services.prompt_service import PromptAlreadyRunningError
 from tests.handler_fakes import (
@@ -249,7 +250,7 @@ async def test_voice_delegates_transcript_to_prompt_service(
 
     assert len(service.calls) == 1
     conversation_id, prompt_text, view = service.calls[0]
-    assert (conversation_id, prompt_text) == (CHAT_ID, "hola mundo")
+    assert (conversation_id, prompt_text) == (telegram_key(CHAT_ID), "hola mundo")
     assert isinstance(view, TelegramChatView)
     assert any("Transcripción:" in text and "hola mundo" in text for text in msg.edit_texts)
 

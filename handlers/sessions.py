@@ -15,13 +15,14 @@ from telegram.ext import ContextTypes
 
 from core_config import DEFAULT_SESSION_NAME
 from frontends.telegram.container import AppContainer
+from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat, require_message
 from locales import get_strings
 from services.session_service import InvalidSessionNameError, SessionNotDiscoveredError
 from services.session_store import SessionExistsError, SessionNotFoundError
 from telegram_config import CONTAINER_KEY
-from utils.logging import get_module_logger, mask_chat_id
+from utils.logging import get_module_logger, mask_conversation_key
 from utils.time_formatting import relative_time
 
 logger = get_module_logger(__name__)
@@ -38,12 +39,13 @@ async def _session_new(
     """Create a named session (lazy: no OpenCode call yet)."""
     msg = require_message(update)
     strings = get_strings()
+    key = telegram_key(chat_id)
     if not name:
         await msg.reply_text(strings.SESSION_NEW_USAGE)
         return
 
     try:
-        await container.session_service.create(chat_id, name)
+        await container.session_service.create(key, name)
     except SessionExistsError:
         await msg.reply_text(
             strings.SESSION_EXISTS.format(name=name) + " "
@@ -51,7 +53,7 @@ async def _session_new(
         )
         return
 
-    logger.info("Session '%s' created for %s", name, mask_chat_id(chat_id))
+    logger.info("Session '%s' created for %s", name, mask_conversation_key(key))
     await msg.reply_text(
         strings.SESSION_CREATED.format(name=name) + "\n"
         "El próximo prompt se ejecutará en esta sesión."
@@ -62,8 +64,9 @@ async def _session_list(update: Update, chat_id: int, container: AppContainer) -
     """Show all sessions — bot-managed + OpenCode-discovered, unified."""
     msg = require_message(update)
     strings = get_strings()
+    key = telegram_key(chat_id)
 
-    snapshot = await container.session_service.list_with_discovered(chat_id)
+    snapshot = await container.session_service.list_with_discovered(key)
     bot_sessions = snapshot.sessions
     unadopted = snapshot.unadopted
 
@@ -112,12 +115,13 @@ async def _session_switch(
     """Switch active session."""
     msg = require_message(update)
     strings = get_strings()
+    key = telegram_key(chat_id)
     if not name:
         await msg.reply_text(strings.SESSION_SWITCH_USAGE)
         return
 
     try:
-        await container.session_service.switch(chat_id, name)
+        await container.session_service.switch(key, name)
     except SessionNotFoundError:
         await msg.reply_text(
             strings.SESSION_NOT_FOUND.format(name=name) + "\n"
@@ -128,7 +132,7 @@ async def _session_switch(
     logger.info(
         "Session switched to '%s' for %s",
         name,
-        mask_chat_id(chat_id),
+        mask_conversation_key(key),
     )
     await msg.reply_text(
         strings.SESSION_SWITCHED.format(name=name) + "\nPróximo prompt usará esta sesión."
@@ -141,12 +145,13 @@ async def _session_delete(
     """Delete a named session."""
     msg = require_message(update)
     strings = get_strings()
+    key = telegram_key(chat_id)
     if not name:
         await msg.reply_text(strings.SESSION_DELETE_USAGE)
         return
 
     try:
-        await container.session_service.delete(chat_id, name)
+        await container.session_service.delete(key, name)
     except SessionNotFoundError:
         await msg.reply_text(strings.SESSION_NOT_FOUND.format(name=name))
         return
@@ -160,10 +165,11 @@ async def _session_info(
     """Show detailed info about a session."""
     msg = require_message(update)
     strings = get_strings()
-    sessions = await container.session_store.list_sessions(chat_id)
+    key = telegram_key(chat_id)
+    sessions = await container.session_store.list_sessions(key)
 
     # Determine the target session name
-    active_session = await container.session_store.get_active_session(chat_id)
+    active_session = await container.session_store.get_active_session(key)
     target_name = (
         name if name else (active_session.name if active_session else DEFAULT_SESSION_NAME)
     )
@@ -229,7 +235,8 @@ async def _session_discover(update: Update, chat_id: int, container: AppContaine
     """Show all OpenCode sessions with adoption status."""
     msg = require_message(update)
     strings = get_strings()
-    discovered = await container.session_service.discover(chat_id)
+    key = telegram_key(chat_id)
+    discovered = await container.session_service.discover(key)
 
     if not discovered:
         await msg.reply_text(strings.SESSION_DISCOVER_EMPTY)
@@ -271,6 +278,7 @@ async def _session_adopt(
 ) -> None:
     """Adopt an existing OpenCode session by real ID."""
     msg = require_message(update)
+    key = telegram_key(chat_id)
     if not real_id or not name:
         await msg.reply_text("\u274c Uso: /session adopt <id> <nombre>")
         return
@@ -283,7 +291,7 @@ async def _session_adopt(
         return
 
     try:
-        await container.session_service.adopt(chat_id, real_id, name)
+        await container.session_service.adopt(key, real_id, name)
     except InvalidSessionNameError:
         await msg.reply_text(
             "\u274c El nombre debe tener entre 1 y 30 caracteres y solo usar "

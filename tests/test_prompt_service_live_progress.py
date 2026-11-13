@@ -15,11 +15,12 @@ from typing import Any
 import pytest
 
 from services.ai_backend import AIBackendResult
-from services.chat_view import ConversationId
+from services.chat_view import ConversationKey
 from services.opencode_server.errors import OpenCodeStreamError
 from services.permissions import PERMISSION_REPLY_NOT_ACCEPTED_NOTICE
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo
+from tests.conversation_keys import conv
 
 SID = "ses_live_123"
 
@@ -38,25 +39,25 @@ def _session(real_id: str | None) -> SessionInfo:
 class _Store:
     def __init__(self, active: SessionInfo | None = None) -> None:
         self.active = active
-        self.updated: list[tuple[ConversationId, str]] = []
+        self.updated: list[tuple[ConversationKey, str]] = []
         self.increments = 0
 
-    async def get_model(self, conversation_id: ConversationId) -> str:
+    async def get_model(self, conversation_id: ConversationKey) -> str:
         return "test/model"
 
-    async def get_active_session(self, conversation_id: ConversationId) -> SessionInfo | None:
+    async def get_active_session(self, conversation_id: ConversationKey) -> SessionInfo | None:
         return self.active
 
     async def get_chat_setting(
-        self, conversation_id: ConversationId, key: str, default: Any = None
+        self, conversation_id: ConversationKey, key: str, default: Any = None
     ) -> Any:
         return default
 
-    async def increment_prompt_count(self, conversation_id: ConversationId) -> int:
+    async def increment_prompt_count(self, conversation_id: ConversationKey) -> int:
         self.increments += 1
         return self.increments
 
-    async def update_session_id(self, conversation_id: ConversationId, real_id: str) -> None:
+    async def update_session_id(self, conversation_id: ConversationKey, real_id: str) -> None:
         self.updated.append((conversation_id, real_id))
 
 
@@ -143,7 +144,7 @@ async def test_live_backend_replaces_the_ticker(monkeypatch) -> None:
         session_store=_Store(_session(None)), provider_factory=_Factory(backend)
     )
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
     # Only the live callback touched the placeholder: no "(Ns)" ticker.
     assert view.handle.updates == ["texto en vivo"]
@@ -160,7 +161,7 @@ async def test_cli_backend_keeps_the_ticker(monkeypatch) -> None:
         session_store=_Store(_session(None)), provider_factory=_Factory(backend)
     )
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
     assert backend.received_on_progress is None
     assert view.handle.updates
@@ -174,7 +175,7 @@ async def test_final_text_is_delivered_and_placeholder_finishes() -> None:
         session_store=_Store(_session("ses_existing")), provider_factory=_Factory(backend)
     )
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
     assert view.sent == ["Respuesta final"]
     assert view.handle.finished == ["\u2705 Completado."]
@@ -193,7 +194,7 @@ async def test_backend_failure_replaces_the_placeholder_and_reraises() -> None:
     )
 
     with pytest.raises(OpenCodeStreamError):
-        await service.execute(conversation_id=1, prompt_text="hola", view=view)
+        await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
     assert view.handle.errors
     assert view.handle.errors[0].startswith("\u274c Error:")
@@ -209,7 +210,7 @@ async def test_session_id_is_not_scraped_from_stdout() -> None:
     )
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
 
     assert store.updated == []
 
@@ -223,9 +224,9 @@ async def test_session_id_from_result_is_persisted() -> None:
     )
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
 
-    assert store.updated == [(1, SID)]
+    assert store.updated == [(conv(1), SID)]
 
 
 async def test_unapplied_permission_decision_is_visible_not_a_silent_success() -> None:
@@ -244,7 +245,7 @@ async def test_unapplied_permission_decision_is_visible_not_a_silent_success() -
         provider_factory=_Factory(backend),
     )
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=view)
 
     assert view.sent == [f"Respuesta final\n\n{PERMISSION_REPLY_NOT_ACCEPTED_NOTICE}"]
     assert view.handle.finished == []

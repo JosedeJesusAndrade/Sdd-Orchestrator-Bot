@@ -15,6 +15,7 @@ import pytest
 
 from services.session_store import SessionInfo, SessionStore
 from services.status_service import StatusService, StatusSnapshot
+from tests.conversation_keys import conv
 
 _CREATED = "2026-05-19T00:00:00+00:00"
 _LAST_USED = "2026-05-19T01:00:00+00:00"
@@ -71,7 +72,7 @@ async def _snapshot(
         cast(SessionStore, FakeStore(session, model="test/model", settings=settings or {})),
         start_time=start_time,
     )
-    return await service.snapshot(42)
+    return await service.snapshot(conv(42))
 
 
 # ── Active session / no session ────────────────────────────────────────
@@ -99,7 +100,7 @@ async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> 
         start_time=940.0,
     )
 
-    snapshot = await service.snapshot(42)
+    snapshot = await service.snapshot(conv(42))
 
     assert isinstance(snapshot, StatusSnapshot)
     assert snapshot.session_name == "work"

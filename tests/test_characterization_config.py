@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 
+from frontends.telegram.keys import telegram_key
 from handlers.commands import config_command
 from locales import get_strings
 from services.session_store import SessionStore
@@ -115,7 +116,7 @@ async def test_accepts_timeout_at_the_bounds(raw: str) -> None:
     await _run(msg, store, ["timeout", raw])
 
     assert store.settings["timeout"] == int(raw)
-    assert store.set_calls == [(CHAT_ID, "timeout", int(raw))]
+    assert store.set_calls == [(telegram_key(CHAT_ID), "timeout", int(raw))]
 
 
 @pytest.mark.parametrize("raw", ["0", "-5", "abc", "12.5", "86401", "999999"])

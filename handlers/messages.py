@@ -25,6 +25,7 @@ from telegram.ext import ContextTypes
 from core_config import OPENAI_API_KEY
 from frontends.telegram.chat_view import TelegramChatView
 from frontends.telegram.container import AppContainer
+from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat, require_message, require_text
 from services.prompt_service import PromptAlreadyRunningError
@@ -162,7 +163,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Delegate to PromptService via container
         await container.prompt_service.execute(
-            conversation_id=chat_id,
+            conversation_id=telegram_key(chat_id),
             prompt_text=text,
             view=TelegramChatView(container.message_sender, chat_id),
         )
@@ -221,7 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         await container.prompt_service.execute(
-            conversation_id=chat_id,
+            conversation_id=telegram_key(chat_id),
             prompt_text=prompt,
             view=TelegramChatView(container.message_sender, chat_id),
         )

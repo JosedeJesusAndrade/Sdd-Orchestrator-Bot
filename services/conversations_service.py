@@ -23,7 +23,7 @@ from services.session_service import SessionService
 from services.session_store import SessionStore
 
 if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+    from services.conversation import ConversationKey
 
 _SLUG_MAX_LENGTH = 30
 
@@ -65,7 +65,7 @@ class ConversationsService:
         self._session_store = session_store
 
     async def list_conversations(
-        self, conversation_id: ConversationId
+        self, conversation_id: ConversationKey
     ) -> list[ConversationSummary]:
         """List root conversations, annotated with adoption/active state."""
         summaries = await self._agent_sessions.list_sessions()
@@ -86,7 +86,7 @@ class ConversationsService:
             )
         return result
 
-    async def open(self, conversation_id: ConversationId, real_id: str, title: str) -> str:
+    async def open(self, conversation_id: ConversationKey, real_id: str, title: str) -> str:
         """Activate a conversation, adopting it first when it is new.
 
         Returns the bot session name that is now active.

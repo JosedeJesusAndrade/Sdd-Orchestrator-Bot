@@ -12,11 +12,14 @@ from typing import Any
 
 import pytest
 
+from frontends.telegram.keys import telegram_key
 from handlers.sessions import session_command
 from locales import get_strings
 from services.session_service import SessionListSnapshot
 from services.session_store import SessionInfo
 from tests.handler_fakes import CHAT_ID, FakeMessage, make_context, make_update
+
+KEY = telegram_key(CHAT_ID)
 
 
 def _info(name: str = "default", real_id: str | None = "ses_x") -> SessionInfo:
@@ -106,7 +109,7 @@ async def test_new_dispatches_to_create() -> None:
 
     await _run(msg, service, store, ["new", "sess-1"])
 
-    assert service.calls == [("create", CHAT_ID, "sess-1")]
+    assert service.calls == [("create", KEY, "sess-1")]
     assert "creada y activada" in msg.reply_texts[-1]
 
 
@@ -128,7 +131,7 @@ async def test_list_dispatches_to_list_with_discovered() -> None:
 
     await _run(msg, service, store, ["list"])
 
-    assert service.calls == [("list", CHAT_ID)]
+    assert service.calls == [("list", KEY)]
     assert get_strings().SESSION_LIST_EMPTY in msg.reply_texts[-1]
 
 
@@ -139,7 +142,7 @@ async def test_switch_dispatches_to_switch() -> None:
 
     await _run(msg, service, store, ["switch", "other"])
 
-    assert service.calls == [("switch", CHAT_ID, "other")]
+    assert service.calls == [("switch", KEY, "other")]
     assert "Sesión cambiada a `other`" in msg.reply_texts[-1]
 
 
@@ -161,7 +164,7 @@ async def test_delete_dispatches_to_delete() -> None:
 
     await _run(msg, service, store, ["delete", "other"])
 
-    assert service.calls == [("delete", CHAT_ID, "other")]
+    assert service.calls == [("delete", KEY, "other")]
     assert "Sesión `other` eliminada" in msg.reply_texts[-1]
 
 
@@ -183,7 +186,7 @@ async def test_info_reads_the_store_and_enriches() -> None:
 
     await _run(msg, service, store, ["info"])
 
-    assert store.list_calls == [CHAT_ID]
+    assert store.list_calls == [KEY]
     assert service.calls == [("enrich", "ses_x")]
 
 
@@ -194,7 +197,7 @@ async def test_discover_dispatches_to_discover() -> None:
 
     await _run(msg, service, store, ["discover"])
 
-    assert service.calls == [("discover", CHAT_ID)]
+    assert service.calls == [("discover", KEY)]
     assert msg.reply_texts[-1] == get_strings().SESSION_DISCOVER_EMPTY
 
 
@@ -205,7 +208,7 @@ async def test_adopt_dispatches_with_id_and_name() -> None:
 
     await _run(msg, service, store, ["adopt", "ses_1", "friendly"])
 
-    assert service.calls == [("adopt", CHAT_ID, "ses_1", "friendly")]
+    assert service.calls == [("adopt", KEY, "ses_1", "friendly")]
     assert "adoptada" in msg.reply_texts[-1]
 
 
@@ -250,4 +253,4 @@ async def test_subcommand_is_case_insensitive(raw: str) -> None:
 
     await _run(msg, service, store, [raw])
 
-    assert service.calls == [("list", CHAT_ID)]
+    assert service.calls == [("list", KEY)]

@@ -15,6 +15,7 @@ import pytest
 
 from services.health_service import HealthService
 from services.session_store import SessionStore
+from tests.conversation_keys import conv
 
 _VERSION_FILE = '[project]\nname = "x"\nversion = "1.2.3"\n'
 
@@ -76,7 +77,7 @@ async def test_snapshot_without_probe_reports_unknown_connectivity(
     monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
     _write_version(tmp_path, _VERSION_FILE)
 
-    snapshot = await _service().snapshot(42)
+    snapshot = await _service().snapshot(conv(42))
 
     assert snapshot.connected is None
     assert snapshot.bot_user == "?"
@@ -91,7 +92,7 @@ async def test_snapshot_without_probe_reports_unknown_connectivity(
 async def test_probe_success_reports_connected_and_bot_user() -> None:
     probe = FakeProbe(response={"username": "my_bot"})
 
-    snapshot = await _service().snapshot(42, connectivity_probe=probe)
+    snapshot = await _service().snapshot(conv(42), connectivity_probe=probe)
 
     assert snapshot.connected is True
     assert snapshot.bot_user == "my_bot"
@@ -101,7 +102,7 @@ async def test_probe_success_reports_connected_and_bot_user() -> None:
 async def test_probe_without_username_leaves_bot_user_unknown() -> None:
     probe = FakeProbe(response={})
 
-    snapshot = await _service().snapshot(42, connectivity_probe=probe)
+    snapshot = await _service().snapshot(conv(42), connectivity_probe=probe)
 
     assert snapshot.connected is True
     assert snapshot.bot_user == "?"
@@ -110,7 +111,7 @@ async def test_probe_without_username_leaves_bot_user_unknown() -> None:
 async def test_probe_failure_reports_disconnected_and_unknown_user() -> None:
     probe = FakeProbe(error=RuntimeError("network down"))
 
-    snapshot = await _service().snapshot(42, connectivity_probe=probe)
+    snapshot = await _service().snapshot(conv(42), connectivity_probe=probe)
 
     assert snapshot.connected is False
     assert snapshot.bot_user == "?"
@@ -126,7 +127,7 @@ async def test_version_is_read_from_pyproject(
     monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
     _write_version(tmp_path, _VERSION_FILE)
 
-    snapshot = await _service().snapshot(1)
+    snapshot = await _service().snapshot(conv(1))
 
     assert snapshot.version == "1.2.3"
 
@@ -136,7 +137,7 @@ async def test_version_falls_back_when_pyproject_is_missing(
 ) -> None:
     monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
 
-    snapshot = await _service().snapshot(1)
+    snapshot = await _service().snapshot(conv(1))
 
     assert snapshot.version == "?"
 
@@ -147,7 +148,7 @@ async def test_version_falls_back_when_pyproject_has_no_version(
     monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
     _write_version(tmp_path, '[project]\nname = "x"\n')
 
-    snapshot = await _service().snapshot(1)
+    snapshot = await _service().snapshot(conv(1))
 
     assert snapshot.version == "?"
 
@@ -161,7 +162,7 @@ async def test_oc_session_count_reflects_fetch(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("services.health_service.fetch_opencode_sessions", fake_fetch)
 
-    snapshot = await _service().snapshot(1)
+    snapshot = await _service().snapshot(conv(1))
 
     assert snapshot.oc_session_count == 2
 
@@ -174,7 +175,7 @@ async def test_oc_session_count_falls_back_to_none_on_error(
 
     monkeypatch.setattr("services.health_service.fetch_opencode_sessions", fake_fetch)
 
-    snapshot = await _service().snapshot(1)
+    snapshot = await _service().snapshot(conv(1))
 
     assert snapshot.oc_session_count is None
 
@@ -185,7 +186,7 @@ async def test_oc_session_count_falls_back_to_none_on_error(
 async def test_workdir_and_model_are_read_from_the_store() -> None:
     store = FakeStore(settings={"workdir": "C:/project"}, model="deepseek/deepseek-flash")
 
-    snapshot = await _service(store).snapshot(1)
+    snapshot = await _service(store).snapshot(conv(1))
 
     assert snapshot.workdir == "C:/project"
     assert snapshot.model == "deepseek/deepseek-flash"

@@ -20,13 +20,14 @@ from typing import Any
 import pytest
 
 from services.ai_backend import AIBackendResult
-from services.chat_view import ConversationId
+from services.chat_view import ConversationKey
 from services.opencode_cli_backend import (
     OpenCodeCLIBackend,
     _parse_json_output,
 )
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo
+from tests.conversation_keys import conv
 
 SID = "ses_eb412dc8fffekyxb7vlcWUaIMH"
 
@@ -227,25 +228,25 @@ def _session(real_id: str | None) -> SessionInfo:
 class _RecordingStore:
     def __init__(self, active: SessionInfo | None) -> None:
         self.active = active
-        self.updated: list[tuple[ConversationId, str]] = []
+        self.updated: list[tuple[ConversationKey, str]] = []
         self.increments = 0
 
-    async def get_model(self, conversation_id: ConversationId) -> str:
+    async def get_model(self, conversation_id: ConversationKey) -> str:
         return "test/model"
 
-    async def get_active_session(self, conversation_id: ConversationId) -> SessionInfo | None:
+    async def get_active_session(self, conversation_id: ConversationKey) -> SessionInfo | None:
         return self.active
 
     async def get_chat_setting(
-        self, conversation_id: ConversationId, key: str, default: Any = None
+        self, conversation_id: ConversationKey, key: str, default: Any = None
     ) -> Any:
         return default
 
-    async def increment_prompt_count(self, conversation_id: ConversationId) -> int:
+    async def increment_prompt_count(self, conversation_id: ConversationKey) -> int:
         self.increments += 1
         return self.increments
 
-    async def update_session_id(self, conversation_id: ConversationId, real_id: str) -> None:
+    async def update_session_id(self, conversation_id: ConversationKey, real_id: str) -> None:
         self.updated.append((conversation_id, real_id))
         if self.active is not None:
             self.active = replace(self.active, real_id=real_id)
@@ -314,9 +315,9 @@ async def test_capture_persists_session_id_when_active_session_has_none() -> Non
     backend = _RecordingBackend([AIBackendResult(stdout="Hola\n", session_id=SID)])
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
 
-    assert store.updated == [(1, SID)]
+    assert store.updated == [(conv(1), SID)]
 
 
 async def test_capture_logs_the_full_session_id(caplog: pytest.LogCaptureFixture) -> None:
@@ -329,7 +330,7 @@ async def test_capture_logs_the_full_session_id(caplog: pytest.LogCaptureFixture
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
     with caplog.at_level(logging.INFO, logger="opencode_bot.services.prompt_service"):
-        await service.execute(conversation_id=123456789, prompt_text="hola", view=_View())
+        await service.execute(conversation_id=conv(123456789), prompt_text="hola", view=_View())
 
     records = [
         record for record in caplog.records if getattr(record, "event", "") == "session_id_captured"
@@ -344,7 +345,7 @@ async def test_capture_does_nothing_without_active_session() -> None:
     backend = _RecordingBackend([AIBackendResult(stdout="Hola\n", session_id=SID)])
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
 
     assert store.updated == []
 
@@ -354,7 +355,7 @@ async def test_capture_does_not_overwrite_adopted_session() -> None:
     backend = _RecordingBackend([AIBackendResult(stdout="Hola\n", session_id=SID)])
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
 
     assert store.updated == []
 
@@ -369,8 +370,8 @@ async def test_second_prompt_continues_captured_session() -> None:
     )
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="hola", view=_View())
-    await service.execute(conversation_id=1, prompt_text="Â¿y ahora?", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="Â¿y ahora?", view=_View())
 
     assert backend.session_ids == [None, SID]
-    assert store.updated == [(1, SID)]
+    assert store.updated == [(conv(1), SID)]

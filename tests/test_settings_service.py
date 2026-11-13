@@ -22,6 +22,7 @@ from services.settings_service import (
     SettingsService,
     UnknownSettingError,
 )
+from tests.conversation_keys import conv
 
 
 class FakeStore:
@@ -50,7 +51,7 @@ def _service(store: FakeStore | SessionStore) -> SettingsService:
 async def test_get_returns_defaults_when_store_is_empty() -> None:
     service = _service(FakeStore())
 
-    settings = await service.get(42)
+    settings = await service.get(conv(42))
 
     assert settings == ChatSettings(
         model=DEFAULT_MODEL,
@@ -63,7 +64,7 @@ async def test_get_returns_defaults_when_store_is_empty() -> None:
 async def test_get_applies_defaults_only_where_values_are_missing() -> None:
     service = _service(FakeStore({"model": "custom/model", "timeout": 45}))
 
-    settings = await service.get(42)
+    settings = await service.get(conv(42))
 
     assert settings.model == "custom/model"
     assert settings.timeout == 45
@@ -78,18 +79,18 @@ async def test_set_persists_and_get_reflects_it() -> None:
     store = FakeStore()
     service = _service(store)
 
-    value = await service.set(42, "workdir", "C:/project")
+    value = await service.set(conv(42), "workdir", "C:/project")
 
     assert value == "C:/project"
-    assert store.set_calls == [(42, "workdir", "C:/project")]
-    assert (await service.get(42)).workdir == "C:/project"
+    assert store.set_calls == [(conv(42), "workdir", "C:/project")]
+    assert (await service.get(conv(42))).workdir == "C:/project"
 
 
 async def test_set_timeout_coerces_to_int_and_persists() -> None:
     store = FakeStore()
     service = _service(store)
 
-    value = await service.set(42, "timeout", "120")
+    value = await service.set(conv(42), "timeout", "120")
 
     assert value == 120
     assert isinstance(value, int)
@@ -108,11 +109,11 @@ async def test_set_model_resolves_aliases(raw: str, resolved: str) -> None:
     store = FakeStore()
     service = _service(store)
 
-    value = await service.set(42, "model", raw)
+    value = await service.set(conv(42), "model", raw)
 
     assert value == resolved
     assert store.settings["model"] == resolved
-    assert (await service.get(42)).model == resolved
+    assert (await service.get(conv(42))).model == resolved
 
 
 @pytest.mark.parametrize("raw", ["abc", "12.5", "", "10s"])
@@ -121,7 +122,7 @@ async def test_set_timeout_non_numeric_raises_and_does_not_persist(raw: str) -> 
     service = _service(store)
 
     with pytest.raises(InvalidSettingValueError) as exc:
-        await service.set(42, "timeout", raw)
+        await service.set(conv(42), "timeout", raw)
 
     assert exc.value.args == (raw,)
     assert store.set_calls == []
@@ -134,7 +135,7 @@ async def test_set_timeout_non_positive_raises_and_does_not_persist(raw: str) ->
     service = _service(store)
 
     with pytest.raises(InvalidSettingValueError) as exc:
-        await service.set(42, "timeout", raw)
+        await service.set(conv(42), "timeout", raw)
 
     assert exc.value.args == ("El timeout debe ser mayor que 0 segundos.",)
     assert store.set_calls == []
@@ -146,7 +147,7 @@ async def test_set_timeout_above_upper_bound_raises_and_does_not_persist() -> No
     service = _service(store)
 
     with pytest.raises(InvalidSettingValueError) as exc:
-        await service.set(42, "timeout", "999999")
+        await service.set(conv(42), "timeout", "999999")
 
     assert exc.value.args == ("El timeout no puede superar los 86400 segundos (24 horas).",)
     assert store.set_calls == []
@@ -157,8 +158,8 @@ async def test_set_timeout_accepts_valid_values_at_bounds() -> None:
     store = FakeStore()
     service = _service(store)
 
-    assert await service.set(42, "timeout", "300") == 300
-    assert await service.set(42, "timeout", "86400") == 86400
+    assert await service.set(conv(42), "timeout", "300") == 300
+    assert await service.set(conv(42), "timeout", "86400") == 86400
     assert store.settings["timeout"] == 86400
 
 
@@ -167,7 +168,7 @@ async def test_set_unknown_key_raises_and_does_not_write() -> None:
     service = _service(store)
 
     with pytest.raises(UnknownSettingError) as exc:
-        await service.set(42, "theme", "dark")
+        await service.set(conv(42), "theme", "dark")
 
     assert exc.value.args == ("theme",)
     assert store.set_calls == []
@@ -179,21 +180,21 @@ async def test_set_unknown_key_raises_and_does_not_write() -> None:
 async def test_get_value_returns_default_for_unset_key() -> None:
     service = _service(FakeStore())
 
-    assert await service.get_value(42, "timeout") == OPENCODE_TIMEOUT
-    assert await service.get_value(42, "model") == DEFAULT_MODEL
+    assert await service.get_value(conv(42), "timeout") == OPENCODE_TIMEOUT
+    assert await service.get_value(conv(42), "model") == DEFAULT_MODEL
 
 
 async def test_get_value_returns_stored_value() -> None:
     service = _service(FakeStore({"timeout": 45}))
 
-    assert await service.get_value(42, "timeout") == 45
+    assert await service.get_value(conv(42), "timeout") == 45
 
 
 async def test_get_value_unknown_key_raises() -> None:
     service = _service(FakeStore())
 
     with pytest.raises(UnknownSettingError) as exc:
-        await service.get_value(42, "theme")
+        await service.get_value(conv(42), "theme")
 
     assert exc.value.args == ("theme",)
 
@@ -205,9 +206,9 @@ async def test_settings_round_trip_through_real_session_store(tmp_path: Path) ->
     store = SessionStore(tmp_path / "sessions.json")
     service = _service(store)
 
-    await service.set("flet-user", "workdir", "C:/project")
+    await service.set(conv("flet-user"), "workdir", "C:/project")
 
-    settings = await service.get("flet-user")
+    settings = await service.get(conv("flet-user"))
     assert settings.workdir == "C:/project"
 
     persisted = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))

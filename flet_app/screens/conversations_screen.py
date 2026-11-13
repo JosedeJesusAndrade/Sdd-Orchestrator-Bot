@@ -19,6 +19,7 @@ import flet as ft
 
 from flet_app.core.design_system import DS
 from services.agent_sessions import ConversationSummary, Message
+from services.conversation import ConversationKey
 from services.conversations_service import ConversationsService
 
 _HISTORY_LIMIT = 50
@@ -58,7 +59,7 @@ class ConversationsScreen:
         self,
         page: ft.Page,
         service: ConversationsService,
-        conversation_id: str,
+        conversation_id: ConversationKey,
         *,
         on_back: Callable[[], None] | None = None,
         on_open: Callable[[ConversationSummary, list[Message], str], None] | None = None,

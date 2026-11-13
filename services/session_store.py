@@ -22,18 +22,60 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from core_config import DEFAULT_MODEL, DEFAULT_SESSION_NAME
-from utils.logging import get_module_logger, mask_chat_id
-
-if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+from services.conversation import ConversationKey
+from utils.logging import get_module_logger, mask_conversation_key
 
 logger = get_module_logger(__name__)
+
+# Legacy bare keys migrated on load: numeric Telegram chat ids and the old
+# ``"flet"`` id. Negative ids are valid Telegram group/channel ids.
+_LEGACY_NUMERIC_KEY = re.compile(r"^-?\d+$")
+
+_TELEGRAM_PREFIX = "telegram:"
+_FLET_PREFIX = "flet:"
+
+
+def _migrate_key(key: str) -> str:
+    """Return the namespaced form of a (possibly legacy) conversation key.
+
+    Idempotent: already-prefixed keys are returned unchanged.
+    """
+    if key.startswith(_TELEGRAM_PREFIX) or key.startswith(_FLET_PREFIX):
+        return key
+    if key == "flet":
+        return "flet:local"
+    if _LEGACY_NUMERIC_KEY.match(key):
+        return f"telegram:{key}"
+    return key
+
+
+def migrate_legacy_keys(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Rewrite legacy conversation keys in a sessions.json payload.
+
+    Returns the migrated mapping and the number of keys that changed. When a
+    legacy key and its canonical prefixed twin both exist, the canonical entry
+    wins (it already represents the new state) so the migration never
+    overwrites real data.
+    """
+    migrated: dict[str, Any] = {}
+    changed = 0
+    for raw_key, value in data.items():
+        key = str(raw_key)
+        new_key = _migrate_key(key)
+        if new_key != key:
+            changed += 1
+            if new_key in migrated:
+                # Canonical key already seen (or collision): keep it.
+                continue
+        migrated[new_key] = value
+    return migrated, changed
 
 
 # ── Domain objects ─────────────────────────────────────────────────────
@@ -76,17 +118,17 @@ class SessionStorePort(Protocol):
     double without inheriting from the concrete production class.
     """
 
-    async def get_model(self, conversation_id: ConversationId) -> str: ...
+    async def get_model(self, conversation_id: ConversationKey) -> str: ...
 
-    async def get_active_session(self, conversation_id: ConversationId) -> SessionInfo | None: ...
+    async def get_active_session(self, conversation_id: ConversationKey) -> SessionInfo | None: ...
 
     async def get_chat_setting(
-        self, conversation_id: ConversationId, key: str, default: Any = None
+        self, conversation_id: ConversationKey, key: str, default: Any = None
     ) -> Any: ...
 
-    async def increment_prompt_count(self, conversation_id: ConversationId) -> int: ...
+    async def increment_prompt_count(self, conversation_id: ConversationKey) -> int: ...
 
-    async def update_session_id(self, conversation_id: ConversationId, real_id: str) -> None: ...
+    async def update_session_id(self, conversation_id: ConversationKey, real_id: str) -> None: ...
 
 
 # ── Service ────────────────────────────────────────────────────────────
@@ -115,8 +157,80 @@ class SessionStore:
 
     # ── Internal: file I/O ─────────────────────────────────────────
 
+    @property
+    def _backup_path(self) -> Path:
+        """Path of the pre-migration backup (``sessions.json.bak``)."""
+        return self._path.with_name(f"{self._path.name}.bak")
+
+    def _write_payload(self, data: dict[str, Any]) -> None:
+        """Write JSON atomically (caller must hold the lock)."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._path.with_name(f"{self._path.name}.tmp")
+        tmp_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp_path.replace(self._path)  # atomic on Windows & Unix
+
+    def _write_backup(self, content: str) -> None:
+        """Preserve the original payload before the first rewrite.
+
+        The backup is written ONCE: if it already exists it is left untouched so
+        an earlier copy of the pre-migration data is never clobbered.
+        """
+        if not self._backup_path.exists():
+            self._backup_path.write_text(content, encoding="utf-8")
+
+    def _load_sync(self) -> dict[str, Any]:
+        """Read + migrate sessions.json. Runs while holding ``_lock``."""
+        try:
+            content = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.debug("SessionStore: no sessions.json at %s, starting fresh", self._path)
+            return {}
+
+        if not content.strip():
+            return {}
+
+        try:
+            raw: object = json.loads(content)
+        except json.JSONDecodeError:
+            # Fail-safe: keep the unreadable payload recoverable and start
+            # fresh instead of silently discarding data.
+            self._write_backup(content)
+            logger.error(
+                "SessionStore: invalid JSON at %s, starting fresh (backup preserved)",
+                self._path,
+            )
+            return {}
+
+        if not isinstance(raw, dict):
+            self._write_backup(content)
+            logger.error(
+                "SessionStore: sessions.json is not an object at %s, starting fresh",
+                self._path,
+            )
+            return {}
+
+        data: dict[str, Any] = raw
+        migrated, changed = migrate_legacy_keys(data)
+        if changed:
+            # Backup BEFORE the rewrite. The atomic replace below either
+            # succeeds fully or leaves the original file intact.
+            self._write_backup(content)
+            self._write_payload(migrated)
+            logger.info(
+                "Conversation keys migrated",
+                extra={
+                    "event": "conversation_key_migrated",
+                    "count": changed,
+                    "path": str(self._path),
+                },
+            )
+        return migrated
+
     async def _load(self) -> dict[str, Any]:
-        """Load sessions.json with TTL cache and lock protection.
+        """Load sessions.json with TTL cache, lock protection and migration.
 
         Returns a FRESH COPY — callers can mutate safely.
         """
@@ -130,15 +244,7 @@ class SessionStore:
             if self._cache is not None and (now - self._cache_time) < self._cache_ttl:
                 return self._cache
 
-            try:
-                content = self._path.read_text(encoding="utf-8")
-                self._cache = json.loads(content) if content.strip() else {}
-            except (FileNotFoundError, json.JSONDecodeError):
-                logger.debug(
-                    "SessionStore: no valid sessions.json at %s, starting fresh", self._path
-                )
-                self._cache = {}
-
+            self._cache = self._load_sync()
             self._cache_time = asyncio.get_event_loop().time()
             return self._cache
 
@@ -149,19 +255,13 @@ class SessionStore:
         This prevents corruption on partial writes (crash-safe).
         """
         async with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self._path.with_suffix(".tmp")
-            tmp_path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            tmp_path.replace(self._path)  # atomic on Windows & Unix
+            self._write_payload(data)
             self._cache = data
             self._cache_time = asyncio.get_event_loop().time()
 
     # ── Public API: session CRUD ───────────────────────────────────
 
-    async def get_active_session(self, conversation_id: ConversationId) -> SessionInfo | None:
+    async def get_active_session(self, conversation_id: ConversationKey) -> SessionInfo | None:
         """Return the currently active session for a chat, or None."""
         data = await self._load()
         chat_data = data.get(str(conversation_id), {})
@@ -182,7 +282,7 @@ class SessionStore:
             is_active=True,
         )
 
-    async def create_session(self, conversation_id: ConversationId, name: str) -> SessionInfo:
+    async def create_session(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Create a new named session and set it as active.
 
         Raises:
@@ -212,7 +312,7 @@ class SessionStore:
             extra={
                 "event": "session_created",
                 "session_name": name,
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
             },
         )
         return SessionInfo(
@@ -225,7 +325,7 @@ class SessionStore:
             is_active=True,
         )
 
-    async def switch_session(self, conversation_id: ConversationId, name: str) -> SessionInfo:
+    async def switch_session(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Switch the active session to another existing one.
 
         Raises:
@@ -247,7 +347,7 @@ class SessionStore:
             extra={
                 "event": "session_switched",
                 "session_name": name,
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
             },
         )
         return SessionInfo(
@@ -260,7 +360,7 @@ class SessionStore:
             is_active=True,
         )
 
-    async def delete_session(self, conversation_id: ConversationId, name: str) -> str | None:
+    async def delete_session(self, conversation_id: ConversationKey, name: str) -> str | None:
         """Delete a session. Returns the real OpenCode session ID if it had one.
 
         If the deleted session was active, auto-switches to the next available.
@@ -301,12 +401,12 @@ class SessionStore:
             extra={
                 "event": "session_deleted",
                 "session_name": name,
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
             },
         )
         return real_id
 
-    async def list_sessions(self, conversation_id: ConversationId) -> list[SessionInfo]:
+    async def list_sessions(self, conversation_id: ConversationKey) -> list[SessionInfo]:
         """Return all sessions for a chat, with the active one flagged."""
         data = await self._load()
         cid = str(conversation_id)
@@ -331,13 +431,13 @@ class SessionStore:
 
     # ── Public API: model preference ───────────────────────────────
 
-    async def get_model(self, conversation_id: ConversationId) -> str:
+    async def get_model(self, conversation_id: ConversationKey) -> str:
         """Return the model preference for a chat, falling back to DEFAULT_MODEL."""
         data = await self._load()
         model: str = data.get(str(conversation_id), {}).get("model", DEFAULT_MODEL)
         return model
 
-    async def set_model(self, conversation_id: ConversationId, model: str) -> None:
+    async def set_model(self, conversation_id: ConversationKey, model: str) -> None:
         """Persist a model preference for a chat."""
         data = await self._load()
         data.setdefault(str(conversation_id), {})["model"] = model
@@ -347,13 +447,13 @@ class SessionStore:
             extra={
                 "event": "model_changed",
                 "model": model,
-                "chat_id_masked": mask_chat_id(conversation_id),
+                "chat_id_masked": mask_conversation_key(conversation_id),
             },
         )
 
     # ── Public API: prompt tracking ────────────────────────────────
 
-    async def increment_prompt_count(self, conversation_id: ConversationId) -> int:
+    async def increment_prompt_count(self, conversation_id: ConversationKey) -> int:
         """Increment prompt count for the active session. Returns new count."""
         data = await self._load()
         cid = str(conversation_id)
@@ -365,7 +465,7 @@ class SessionStore:
         count: int = session["prompt_count"]
         return count
 
-    async def update_session_id(self, conversation_id: ConversationId, real_id: str) -> None:
+    async def update_session_id(self, conversation_id: ConversationKey, real_id: str) -> None:
         """Update the real OpenCode session ID for the active session."""
         data = await self._load()
         cid = str(conversation_id)
@@ -376,7 +476,7 @@ class SessionStore:
         await self._save(data)
 
     async def update_session_title(
-        self, conversation_id: ConversationId, name: str, title: str
+        self, conversation_id: ConversationKey, name: str, title: str
     ) -> None:
         """Update the title of a named session."""
         data = await self._load()
@@ -387,7 +487,7 @@ class SessionStore:
         await self._save(data)
 
     async def get_chat_setting(
-        self, conversation_id: ConversationId, key: str, default: Any = None
+        self, conversation_id: ConversationKey, key: str, default: Any = None
     ) -> Any:
         data = await self._load()
         chat_data = data.get(str(conversation_id), {})
@@ -395,7 +495,7 @@ class SessionStore:
         return settings.get(key, default)
 
     async def set_chat_setting(
-        self, conversation_id: ConversationId, key: str, value: object
+        self, conversation_id: ConversationKey, key: str, value: object
     ) -> None:
         data = await self._load()
         cid = str(conversation_id)
@@ -404,12 +504,12 @@ class SessionStore:
         settings[key] = value
         await self._save(data)
 
-    async def get_all_chat_settings(self, conversation_id: ConversationId) -> dict[str, Any]:
+    async def get_all_chat_settings(self, conversation_id: ConversationKey) -> dict[str, Any]:
         data = await self._load()
         settings: dict[str, Any] = data.get(str(conversation_id), {}).get("settings", {})
         return settings
 
-    async def reset_session(self, conversation_id: ConversationId) -> None:
+    async def reset_session(self, conversation_id: ConversationKey) -> None:
         """Reset the active session's OpenCode ID and prompt count.
 
         Used by /new — clears the real session ID so the next prompt
@@ -429,6 +529,6 @@ class SessionStore:
                 extra={
                     "event": "session_reset",
                     "session_name": active_name,
-                    "chat_id_masked": mask_chat_id(conversation_id),
+                    "chat_id_masked": mask_conversation_key(conversation_id),
                 },
             )

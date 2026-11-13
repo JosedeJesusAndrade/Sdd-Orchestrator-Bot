@@ -14,7 +14,7 @@ from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR, resol
 from services.session_store import SessionStore
 
 if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+    from services.conversation import ConversationKey
 
 SETTINGS_KEYS: tuple[str, ...] = ("model", "timeout", "workdir", "provider")
 
@@ -56,7 +56,7 @@ class SettingsService:
     def __init__(self, session_store: SessionStore) -> None:
         self._store = session_store
 
-    async def get(self, conversation_id: ConversationId) -> ChatSettings:
+    async def get(self, conversation_id: ConversationKey) -> ChatSettings:
         """Return the effective settings with defaults applied."""
         raw = await self._store.get_all_chat_settings(conversation_id)
         return ChatSettings(
@@ -66,7 +66,7 @@ class SettingsService:
             provider=raw.get("provider", "opencode"),
         )
 
-    async def get_value(self, conversation_id: ConversationId, key: str) -> Any:
+    async def get_value(self, conversation_id: ConversationKey, key: str) -> Any:
         """Return one setting with its default applied.
 
         Raises:
@@ -75,7 +75,7 @@ class SettingsService:
         self._ensure_known(key)
         return await self._store.get_chat_setting(conversation_id, key, _DEFAULTS[key])
 
-    async def set(self, conversation_id: ConversationId, key: str, raw_value: str) -> str | int:
+    async def set(self, conversation_id: ConversationKey, key: str, raw_value: str) -> str | int:
         """Validate and persist one setting, returning the stored value.
 
         ``model`` values go through alias resolution; ``timeout`` must be an

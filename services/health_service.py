@@ -22,7 +22,7 @@ from services.session_store import SessionStore
 from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
-    from services.chat_view import ConversationId
+    from services.conversation import ConversationKey
 
 logger = get_module_logger(__name__)
 
@@ -57,7 +57,7 @@ class HealthService:
 
     async def snapshot(
         self,
-        conversation_id: ConversationId,
+        conversation_id: ConversationKey,
         *,
         connectivity_probe: ConnectivityProbe | None = None,
     ) -> HealthSnapshot:

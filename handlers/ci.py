@@ -16,6 +16,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from frontends.telegram.container import AppContainer
+from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat
 from telegram_config import CONTAINER_KEY
@@ -94,12 +95,13 @@ async def pr_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     Executes: git checkout -b → git add → git commit → git push → gh pr create
     """
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
     sender = container.message_sender
     store = container.session_store
 
     # Get the workdir for this user (Week 4 per-chat config)
-    workdir = await store.get_chat_setting(chat_id, "workdir", os.getcwd())
+    workdir = await store.get_chat_setting(key, "workdir", os.getcwd())
 
     # Parse PR title
     title = " ".join(context.args) if context.args else "Update from Telegram"
@@ -223,6 +225,7 @@ async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     Accepts full name, partial match, or alias (lowercase, no spaces).
     """
     chat_id = require_chat(update).id
+    key = telegram_key(chat_id)
     container = _get_container(context)
     sender = container.message_sender
     store = container.session_store
@@ -242,11 +245,11 @@ async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         for entry in sorted(parent.iterdir()):
             if entry.is_dir() and (entry / ".git").exists():
                 name = entry.name
-                key = name.lower().replace(" ", "-")
+                alias_key = name.lower().replace(" ", "-")
                 # Short alias: first word or first segment before dash
-                short = key.split("-")[0]
+                short = alias_key.split("-")[0]
                 projects[name] = entry
-                projects[key] = entry
+                projects[alias_key] = entry
                 if short not in projects:
                     projects[short] = entry
     except PermissionError:
@@ -260,7 +263,7 @@ async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Get current workdir
-    current = await store.get_chat_setting(chat_id, "workdir", OPENCODE_WORKDIR)
+    current = await store.get_chat_setting(key, "workdir", OPENCODE_WORKDIR)
     current_path = Path(current)
 
     if not args:
@@ -299,7 +302,7 @@ async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
     workdir = str(target)
-    await store.set_chat_setting(chat_id, "workdir", workdir)
+    await store.set_chat_setting(key, "workdir", workdir)
     await sender.send_plain(
         chat_id, f"✅ Workdir cambiado a:\n`{workdir}`\n\nEl próximo prompt usará este proyecto."
     )

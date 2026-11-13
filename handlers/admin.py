@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from core_config import DEFAULT_SESSION_NAME
 from frontends.telegram.container import AppContainer
+from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat, require_message
 from persistence.sessions import fetch_opencode_sessions, load_session_map_safe
@@ -68,7 +69,7 @@ async def session_preview_command(
     container = _get_container(context)
 
     smap = await load_session_map_safe()
-    chat_sessions = smap.get(str(chat_id), {})
+    chat_sessions = smap.get(str(telegram_key(chat_id)), {})
 
     lines = ["\U0001f4cb *Sesiones del Bot*"]
 

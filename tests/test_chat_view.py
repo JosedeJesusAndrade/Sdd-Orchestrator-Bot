@@ -15,9 +15,10 @@ from typing import Any
 from frontends.telegram.bot_port import MessageInfo
 from frontends.telegram.chat_view import TelegramChatView
 from services.ai_backend import AIBackendResult
-from services.chat_view import ChatView, ConversationId, ProgressHandle
+from services.chat_view import ChatView, ConversationKey, ProgressHandle
 from services.prompt_service import PromptService
 from services.session_store import SessionInfo, SessionStore
+from tests.conversation_keys import conv
 
 # ── Fakes (core, frontend-agnostic) ────────────────────────────────────
 
@@ -27,10 +28,10 @@ class FakeStore:
         self.increments = 0
         self._settings = settings or {}
 
-    async def get_model(self, conversation_id: ConversationId) -> str:
+    async def get_model(self, conversation_id: ConversationKey) -> str:
         return "test/model"
 
-    async def get_active_session(self, conversation_id: ConversationId) -> SessionInfo | None:
+    async def get_active_session(self, conversation_id: ConversationKey) -> SessionInfo | None:
         return SessionInfo(
             name="default",
             real_id=None,
@@ -41,15 +42,15 @@ class FakeStore:
         )
 
     async def get_chat_setting(
-        self, conversation_id: ConversationId, key: str, default: Any = None
+        self, conversation_id: ConversationKey, key: str, default: Any = None
     ) -> Any:
         return self._settings.get(key, default)
 
-    async def increment_prompt_count(self, conversation_id: ConversationId) -> int:
+    async def increment_prompt_count(self, conversation_id: ConversationKey) -> int:
         self.increments += 1
         return self.increments
 
-    async def update_session_id(self, conversation_id: ConversationId, real_id: str) -> None:
+    async def update_session_id(self, conversation_id: ConversationKey, real_id: str) -> None:
         return None
 
 
@@ -141,7 +142,7 @@ async def test_success_lifecycle_start_update_send_finish(monkeypatch) -> None:
     )
     service = PromptService(session_store=FakeStore(), provider_factory=FakeFactory(backend))
 
-    result = await service.execute(conversation_id=123, prompt_text="hi", view=view)
+    result = await service.execute(conversation_id=conv(123), prompt_text="hi", view=view)
 
     assert result == "Hello from the engine"
     assert view.started == ["\u23f3 OpenCode procesando..."]
@@ -163,7 +164,7 @@ async def test_failure_lifecycle_errors_without_send_or_finish() -> None:
     )
     service = PromptService(session_store=FakeStore(), provider_factory=FakeFactory(backend))
 
-    result = await service.execute(conversation_id=1, prompt_text="x", view=view)
+    result = await service.execute(conversation_id=conv(1), prompt_text="x", view=view)
 
     assert result == ""
     handle = view.handles[0]
@@ -176,9 +177,9 @@ async def test_cancel_before_execution_calls_error_cancelado() -> None:
     view = FakeChatView()
     backend = FakeBackend(AIBackendResult(stdout="should not run", returncode=0))
     service = PromptService(session_store=FakeStore(), provider_factory=FakeFactory(backend))
-    service._cancel.add(7)
+    service._cancel.add(conv(7))
 
-    result = await service.execute(conversation_id=7, prompt_text="x", view=view)
+    result = await service.execute(conversation_id=conv(7), prompt_text="x", view=view)
 
     assert result == ""
     handle = view.handles[0]
@@ -198,9 +199,9 @@ async def test_cancel_before_execution_stops_progress_task(monkeypatch) -> None:
     view = FakeChatView()
     backend = FakeBackend(AIBackendResult(stdout="must not run", returncode=0))
     service = PromptService(session_store=FakeStore(), provider_factory=FakeFactory(backend))
-    service._cancel.add(7)
+    service._cancel.add(conv(7))
 
-    result = await service.execute(conversation_id=7, prompt_text="x", view=view)
+    result = await service.execute(conversation_id=conv(7), prompt_text="x", view=view)
 
     assert result == ""
     handle = view.handles[0]
@@ -216,7 +217,7 @@ async def test_no_finish_when_delivery_fails() -> None:
     backend = FakeBackend(AIBackendResult(stdout="content", returncode=0))
     service = PromptService(session_store=FakeStore(), provider_factory=FakeFactory(backend))
 
-    await service.execute(conversation_id=1, prompt_text="x", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="x", view=view)
 
     handle = view.handles[0]
     assert view.sent, "send must still be attempted"
@@ -242,7 +243,7 @@ async def test_string_conversation_id_end_to_end(tmp_path) -> None:
     service = PromptService(session_store=store, provider_factory=FakeFactory(backend))
 
     result = await service.execute(
-        conversation_id="flet-user-42",
+        conversation_id=conv("flet-user-42"),
         prompt_text="hi",
         view=view,
     )
@@ -254,7 +255,7 @@ async def test_string_conversation_id_end_to_end(tmp_path) -> None:
     # and was persisted under its own key.
     persisted = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
     assert "flet-user-42" in persisted
-    assert await store.get_model("flet-user-42")  # default model read back by string id
+    assert await store.get_model(conv("flet-user-42"))  # default model read back by string id
     assert persisted["flet-user-42"]["sessions"]["default"]["prompt_count"] == 1
 
 
@@ -275,7 +276,7 @@ async def test_per_chat_timeout_is_passed_to_backend() -> None:
         provider_factory=FakeFactory(backend),
     )
 
-    await service.execute(conversation_id=1, prompt_text="x", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="x", view=view)
 
     assert backend.timeout == 42
 
@@ -291,7 +292,7 @@ async def test_timeout_falls_back_to_global_when_unset() -> None:
         provider_factory=FakeFactory(backend),
     )
 
-    await service.execute(conversation_id=1, prompt_text="x", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="x", view=view)
 
     assert backend.timeout == OPENCODE_TIMEOUT
 
@@ -465,8 +466,8 @@ async def test_f3_each_conversation_gets_own_backend_and_isolated_cancel() -> No
 
     view_a = FakeChatView()
     view_b = FakeChatView()
-    task_a = asyncio.create_task(service.execute(101, "alpha", view_a))
-    task_b = asyncio.create_task(service.execute(202, "beta", view_b))
+    task_a = asyncio.create_task(service.execute(conv(101), "alpha", view_a))
+    task_b = asyncio.create_task(service.execute(conv(202), "beta", view_b))
 
     try:
         # Wait until BOTH conversations have their own started backend in flight.
@@ -479,14 +480,14 @@ async def test_f3_each_conversation_gets_own_backend_and_isolated_cancel() -> No
         else:
             raise AssertionError("both conversations did not start concurrently")
 
-        backend_a = service._backends[101]
-        backend_b = service._backends[202]
+        backend_a = service._backends[conv(101)]
+        backend_b = service._backends[conv(202)]
         assert backend_a is not backend_b, "each conversation must own its backend instance"
         assert isinstance(backend_a, _RecordingBackend)
         assert isinstance(backend_b, _RecordingBackend)
 
         # Cancel ONLY conversation 101.
-        assert service.cancel(101) is True
+        assert service.cancel(conv(101)) is True
 
         assert backend_a.cancelled is True, "the cancelled conversation's backend must be hit"
         assert backend_b.cancelled is False, "the OTHER conversation's backend must be untouched"
@@ -515,7 +516,7 @@ async def test_f3_backend_released_after_execution() -> None:
     service = PromptService(session_store=FakeStore(), provider_factory=factory)
 
     view = FakeChatView()
-    await service.execute(conversation_id=1, prompt_text="x", view=view)
+    await service.execute(conversation_id=conv(1), prompt_text="x", view=view)
 
     assert service._backends == {}, "the backend must be released after the prompt"
 
@@ -628,7 +629,7 @@ async def test_f8_partial_delivery_leaves_placeholder_in_error_state() -> None:
         provider_factory=FakeFactory(backend),
     )
 
-    await service.execute(conversation_id=7, prompt_text="hi", view=view)
+    await service.execute(conversation_id=conv(7), prompt_text="hi", view=view)
 
     assert bot.edits, "the placeholder must be edited to a terminal state"
     assert bot.edits[-1].startswith("\u26a0\ufe0f"), bot.edits[-1]

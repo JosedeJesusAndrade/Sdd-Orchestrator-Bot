@@ -25,14 +25,14 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from services.chat_view import ConversationId
+from services.conversation import ConversationKey
 
 
 @runtime_checkable
 class FrontendGate(Protocol):
     """The 'who is allowed' policy, independent of the frontend."""
 
-    def is_allowed(self, conversation_id: ConversationId) -> bool:
+    def is_allowed(self, conversation_id: ConversationKey) -> bool:
         """Return True when this conversation may use the core."""
         ...
 
@@ -40,5 +40,5 @@ class FrontendGate(Protocol):
 class AllowAllGate:
     """v1: access == physical access to the device (single-user local app)."""
 
-    def is_allowed(self, conversation_id: ConversationId) -> bool:
+    def is_allowed(self, conversation_id: ConversationKey) -> bool:
         return True

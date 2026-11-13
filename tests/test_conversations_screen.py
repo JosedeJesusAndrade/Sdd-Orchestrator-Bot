@@ -23,6 +23,7 @@ from flet_app.screens.conversations_screen import (
     relative_time,
 )
 from services.agent_sessions import ConversationSummary, Message
+from tests.conversation_keys import conv
 
 
 class FakePage:
@@ -159,7 +160,7 @@ def _build_screen(
     screen = ConversationsScreen(
         cast(ft.Page, page),
         service,  # type: ignore[arg-type]
-        "flet",
+        conv("flet"),
         on_back=on_back,
         on_open=on_open,
     )
