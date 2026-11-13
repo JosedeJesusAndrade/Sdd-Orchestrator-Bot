@@ -57,10 +57,15 @@ class SettingsService:
         self._store = session_store
 
     async def get(self, conversation_id: ConversationKey) -> ChatSettings:
-        """Return the effective settings with defaults applied."""
+        """Return the effective settings with defaults applied.
+
+        ``model`` is read from the SAME source ``PromptService`` uses
+        (``SessionStore.get_model``), so ``/config model`` and ``/model``
+        agree on a single effective value.
+        """
         raw = await self._store.get_all_chat_settings(conversation_id)
         return ChatSettings(
-            model=raw.get("model", DEFAULT_MODEL),
+            model=await self._store.get_model(conversation_id),
             timeout=raw.get("timeout", OPENCODE_TIMEOUT),
             workdir=raw.get("workdir", OPENCODE_WORKDIR),
             provider=raw.get("provider", "opencode"),
@@ -73,6 +78,8 @@ class SettingsService:
             UnknownSettingError: if ``key`` is not supported.
         """
         self._ensure_known(key)
+        if key == "model":
+            return await self._store.get_model(conversation_id)
         return await self._store.get_chat_setting(conversation_id, key, _DEFAULTS[key])
 
     async def set(self, conversation_id: ConversationKey, key: str, raw_value: str) -> str | int:
@@ -87,10 +94,17 @@ class SettingsService:
         """
         self._ensure_known(key)
 
-        value: str | int
+        # ``model`` has a dedicated accessor shared with ``/model`` and
+        # ``PromptService``. Writing it through ``set_chat_setting`` would
+        # update the inert ``settings.model`` mirror while prompts keep
+        # reading the top-level key, so ``/config model`` had no effect.
         if key == "model":
-            value = resolve_model(raw_value)
-        elif key == "timeout":
+            model = resolve_model(raw_value)
+            await self._store.set_model(conversation_id, model)
+            return model
+
+        value: str | int
+        if key == "timeout":
             try:
                 value = int(raw_value)
             except ValueError as e:

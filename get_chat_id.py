@@ -14,7 +14,10 @@ nest_asyncio.apply()
 from dotenv import load_dotenv  # noqa: E402  (import order: after nest_asyncio.apply())
 from telegram.ext import Application, CommandHandler  # noqa: E402  (same)
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+# Standalone utility: it must not import the bot. The repository root is this
+# file's directory, which is also where ``core_config.ENV_PATH`` points, so the
+# ``.env`` the docs tell you to create is the one this script loads.
+ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
 
 

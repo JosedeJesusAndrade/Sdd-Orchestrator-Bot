@@ -13,8 +13,9 @@ from typing import Any, cast
 
 import pytest
 
+from core_config import DEFAULT_MODEL
 from frontends.telegram.keys import telegram_key
-from handlers.commands import config_command
+from handlers.commands import config_command, model_command
 from locales import get_strings
 from services.session_store import SessionStore
 from services.settings_service import SettingsService
@@ -37,6 +38,12 @@ class _FakeSettingsStore:
     async def set_chat_setting(self, conversation_id: Any, key: str, value: Any) -> None:
         self.settings[key] = value
         self.set_calls.append((conversation_id, key, value))
+
+    async def get_model(self, conversation_id: Any) -> str:
+        return cast(str, self.settings.get("model", DEFAULT_MODEL))
+
+    async def set_model(self, conversation_id: Any, model: str) -> None:
+        self.settings["model"] = model
 
 
 async def _run(
@@ -139,3 +146,35 @@ async def test_unknown_key_reports_and_does_not_persist() -> None:
 
     assert get_strings().CONFIG_UNKNOWN_KEY.format(key="theme") == msg.reply_texts[-1]
     assert store.set_calls == []
+
+
+# ── BUG 1 regression: /config model is the effective model ──────────────
+
+
+async def test_config_model_changes_the_effective_model() -> None:
+    store = _FakeSettingsStore()
+    msg = FakeMessage()
+
+    await _run(msg, store, ["model", "pro"])
+
+    resolved = "deepseek/deepseek-v4-pro"
+    assert "model → `deepseek/deepseek-v4-pro`" in msg.reply_texts[-1]
+    # Same accessor PromptService reads, so the next prompt uses the new model.
+    assert await store.get_model(telegram_key(CHAT_ID)) == resolved
+
+    listing = FakeMessage()
+    await _run(listing, store, None)
+    assert f"modelo: `{resolved}`" in listing.reply_texts[-1]
+
+
+async def test_model_command_still_sets_the_effective_model() -> None:
+    store = _FakeSettingsStore()
+    msg = FakeMessage()
+    service = SettingsService(cast(SessionStore, store))
+    container = SimpleNamespace(settings_service=service, session_store=store)
+
+    await model_command(make_update(msg), make_context(container, args=["flash"]))
+
+    resolved = "deepseek/deepseek-flash"
+    assert await store.get_model(telegram_key(CHAT_ID)) == resolved
+    assert f"`{resolved}`" in msg.reply_texts[-1]

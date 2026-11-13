@@ -1,6 +1,5 @@
-"""Tests for utility functions: clean_opencode_output, telegramify_markdown,
-minimal_escape_mdv2, split_message, sanitize_markdownv2, _filter_stderr,
-_remove_tool_traces."""
+"""Tests for utility functions: clean_opencode_output, split_message,
+_filter_stderr, _remove_tool_traces."""
 
 import os
 import sys
@@ -8,11 +7,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from formatting.markdown import _filter_stderr, clean_opencode_output
-from frontends.telegram.formatting import (
-    minimal_escape_mdv2,
-    split_message,
-    telegramify_markdown,
-)
+from frontends.telegram.formatting import split_message
 from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
 
@@ -63,56 +58,6 @@ class TestCleanOpencodeOutput:
         text = "Hello\n\n\n\nWorld"
         result = clean_opencode_output(text)
         assert "\n\n\n\n" not in result
-
-
-class TestTelegramifyMarkdown:
-    """Tests for telegramify_markdown()."""
-
-    def test_converts_table_to_code_block(self):
-        text = "| Date | Count |\n|------|-------|\n| May  | 5     |"
-        result = telegramify_markdown(text)
-        assert "```" in result
-
-    def test_passes_through_normal_text(self):
-        text = "Hello world, no tables here."
-        result = telegramify_markdown(text)
-        assert "Hello world" in result
-        assert result == text
-
-
-class TestMinimalEscapeMdv2:
-    """Tests for minimal_escape_mdv2()."""
-
-    def test_escapes_underscore_in_variable_name(self):
-        text = "get_user function"
-        result = minimal_escape_mdv2(text)
-        assert "get\\_user" in result
-
-    def test_does_not_escape_inside_code_block(self):
-        text = "```python\ndef get_user():\n    pass\n```"
-        result = minimal_escape_mdv2(text)
-        assert "get_user()" in result
-        assert "get\\_user" not in result
-
-    def test_does_not_escape_inside_inline_code(self):
-        text = "Use `get_user` function"
-        result = minimal_escape_mdv2(text)
-        assert "`get_user`" in result
-
-    def test_escapes_period(self):
-        text = "End of sentence."
-        result = minimal_escape_mdv2(text)
-        assert "\\." in result
-
-    def test_escapes_exclamation(self):
-        text = "Hello!"
-        result = minimal_escape_mdv2(text)
-        assert "\\!" in result
-
-    def test_escapes_plus_sign(self):
-        text = "a + b"
-        result = minimal_escape_mdv2(text)
-        assert "\\+" in result
 
 
 class TestSplitMessage:

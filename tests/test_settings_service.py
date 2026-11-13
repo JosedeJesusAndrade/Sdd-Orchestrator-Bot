@@ -40,6 +40,12 @@ class FakeStore:
         self.settings[key] = value
         self.set_calls.append((conversation_id, key, value))
 
+    async def get_model(self, conversation_id: object) -> str:
+        return cast(str, self.settings.get("model", DEFAULT_MODEL))
+
+    async def set_model(self, conversation_id: object, model: str) -> None:
+        self.settings["model"] = model
+
 
 def _service(store: FakeStore | SessionStore) -> SettingsService:
     return SettingsService(cast(SessionStore, store))
@@ -114,6 +120,28 @@ async def test_set_model_resolves_aliases(raw: str, resolved: str) -> None:
     assert value == resolved
     assert store.settings["model"] == resolved
     assert (await service.get(conv(42))).model == resolved
+
+
+async def test_set_model_updates_the_effective_model_read_by_prompts(tmp_path: Path) -> None:
+    """Regression: ``/config model`` must change what ``/model`` and prompts use.
+
+    ``SettingsService`` now writes the SAME top-level key ``SessionStore.get_model``
+    exposes (the accessor ``PromptService`` reads), instead of the inert
+    ``settings.model`` mirror.
+    """
+    store = SessionStore(tmp_path / "sessions.json")
+    service = _service(store)
+
+    await service.set(conv("telegram:42"), "model", "pro")
+
+    effective = "deepseek/deepseek-v4-pro"
+    assert await store.get_model(conv("telegram:42")) == effective
+    assert (await service.get(conv("telegram:42"))).model == effective
+    assert await service.get_value(conv("telegram:42"), "model") == effective
+
+    persisted = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
+    assert persisted["telegram:42"]["model"] == effective
+    assert "settings" not in persisted["telegram:42"]
 
 
 @pytest.mark.parametrize("raw", ["abc", "12.5", "", "10s"])

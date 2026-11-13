@@ -25,6 +25,10 @@ gui = [
 [tool.setuptools]
 packages = [
     "formatting",
+    "flet_app",
+    "flet_app.components",
+    "flet_app.core",
+    "flet_app.screens",
     "frontends",
     "frontends.telegram",
     "handlers",

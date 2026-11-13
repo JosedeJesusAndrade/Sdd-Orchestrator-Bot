@@ -212,15 +212,11 @@ Con `OPENCODE_BACKEND=cli`, el paso 7 usa `OpenCodeCLIBackend`: un subproceso
   descrita por sus code points, sin incrustar bytes corruptos), líneas de
   auto-rechazo y líneas vacías repetidas. `_filter_stderr()` y
   `_assemble_response()` combinan stdout/stderr.
-- **Telegram** (`frontends/telegram/formatting.py`): `telegramify_markdown()`
-  envuelve tablas en bloques de código, `sanitize_markdownv2()` y
-  `minimal_escape_mdv2()` escapan caracteres, y `split_message(text, max_len)`
+- **Telegram** (`frontends/telegram/formatting.py`): `split_message(text, max_len)`
   parte el texto; `max_len` es obligatorio y lo inyecta el frontend (4000,
   `TELEGRAM_MAX_MESSAGE_LENGTH`).
 - `MessageSender.send_formatted()` intenta MarkdownV2 y, si falla, reintenta en
-  texto plano sin `*`, `` ` ``, `#` ni `_`. Hoy el send path **no** llama a
-  `telegramify_markdown()` ni a los sanitizadores; esas funciones existen y
-  están cubiertas por tests, pero no se aplican en producción.
+  texto plano sin `*`, `` ` ``, `#` ni `_`.
 
 ---
 
