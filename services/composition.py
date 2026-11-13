@@ -49,6 +49,7 @@ from services.session_service import SessionService
 from services.session_store import SessionStore
 from services.settings_service import SettingsService
 from services.status_service import StatusService
+from services.workdir_service import WorkdirService
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ class CoreStack:
     health_service: HealthService
     session_service: SessionService
     settings_service: SettingsService
+    workdir_service: WorkdirService
     agent_sessions: AgentSessions
     conversations_service: ConversationsService
     start_time: float
@@ -199,6 +201,7 @@ def build_prompt_stack(
         health_service=HealthService(session_store, resolved_start_time),
         session_service=session_service,
         settings_service=SettingsService(session_store),
+        workdir_service=WorkdirService(session_store, root=Path(workdir)),
         agent_sessions=agent_sessions,
         conversations_service=conversations_service,
         start_time=resolved_start_time,

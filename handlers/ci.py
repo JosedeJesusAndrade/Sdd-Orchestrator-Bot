@@ -19,6 +19,15 @@ from frontends.telegram.container import AppContainer
 from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat
+from services.workdir_service import (
+    AmbiguousWorkdirError,
+    ProjectsSnapshot,
+    ResolveResult,
+    WorkdirNoProjectsError,
+    WorkdirNotFoundError,
+    WorkdirPermissionDeniedError,
+    WorkdirRootNotFoundError,
+)
 from telegram_config import CONTAINER_KEY
 
 
@@ -216,93 +225,60 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     app.bot_data["stop_event"].set()
 
 
+def _format_listing(snapshot: ProjectsSnapshot) -> str:
+    """Render a projects snapshot (the Telegram view)."""
+    error = snapshot.error
+    if isinstance(error, WorkdirRootNotFoundError):
+        return f"❌ Directorio no encontrado: `{error.root}`"
+    if isinstance(error, WorkdirPermissionDeniedError):
+        return "❌ Sin permisos para listar directorios."
+    if isinstance(error, WorkdirNoProjectsError):
+        return "⚠️ No se encontraron proyectos con `.git` en el directorio."
+
+    lines = ["⚙️ *Proyectos disponibles:*\n"]
+    for entry in snapshot.entries:
+        marker = "🟢" if entry.is_current else "  "
+        lines.append(f"{marker} `{entry.alias}` → {entry.name}")
+    return "\n".join(lines)
+
+
+def _format_switch(result: ResolveResult) -> str:
+    """Render a resolution result (the Telegram view)."""
+    error = result.error
+    if isinstance(error, WorkdirRootNotFoundError):
+        return f"❌ Directorio no encontrado: `{error.root}`"
+    if isinstance(error, WorkdirPermissionDeniedError):
+        return "❌ Sin permisos para listar directorios."
+    if isinstance(error, WorkdirNoProjectsError):
+        return "⚠️ No se encontraron proyectos con `.git` en el directorio."
+    if isinstance(error, AmbiguousWorkdirError):
+        match_list = ", ".join(error.candidates)
+        return f"⚠️ Múltiples coincidencias: {match_list}. Sé más específico."
+    if isinstance(error, WorkdirNotFoundError):
+        return f"❌ Proyecto no encontrado: `{result.query}`"
+
+    assert result.entry is not None  # every failure path is handled above
+    workdir = str(result.entry.path)
+    return f"✅ Workdir cambiado a:\n`{workdir}`\n\nEl próximo prompt usará este proyecto."
+
+
 @authorized
 async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List or switch OpenCode workdir: /wdir [project]
 
-    Without args: lists all projects (folders with .git) in the parent dir.
-    With arg: switches the per-chat workdir to that project.
-    Accepts full name, partial match, or alias (lowercase, no spaces).
+    Thin adapter: parse the args, delegate to ``WorkdirService`` and render the
+    returned DTO/error. The discovery, aliasing, matching and persistence live
+    in ``services/workdir_service.py`` so other frontends can reuse them.
     """
     chat_id = require_chat(update).id
     key = telegram_key(chat_id)
     container = _get_container(context)
     sender = container.message_sender
-    store = container.session_store
-    args = context.args
+    service = container.workdir_service
 
-    # Default parent dir — where all projects live
-    from core_config import OPENCODE_WORKDIR
+    if not context.args:
+        text = _format_listing(await service.list(key))
+    else:
+        text = _format_switch(await service.switch(key, " ".join(context.args)))
 
-    parent = Path(OPENCODE_WORKDIR)
-    if not parent.exists():
-        await sender.send_plain(chat_id, f"❌ Directorio no encontrado: `{parent}`")
-        return
-
-    # Discover projects (folders with .git)
-    projects: dict[str, Path] = {}
-    try:
-        for entry in sorted(parent.iterdir()):
-            if entry.is_dir() and (entry / ".git").exists():
-                name = entry.name
-                alias_key = name.lower().replace(" ", "-")
-                # Short alias: first word or first segment before dash
-                short = alias_key.split("-")[0]
-                projects[name] = entry
-                projects[alias_key] = entry
-                if short not in projects:
-                    projects[short] = entry
-    except PermissionError:
-        await sender.send_plain(chat_id, "❌ Sin permisos para listar directorios.")
-        return
-
-    if not projects:
-        await sender.send_plain(
-            chat_id, "⚠️ No se encontraron proyectos con `.git` en el directorio."
-        )
-        return
-
-    # Get current workdir
-    current = await store.get_chat_setting(key, "workdir", OPENCODE_WORKDIR)
-    current_path = Path(current)
-
-    if not args:
-        # List all projects with current marked
-        seen = set()
-        lines = ["⚙️ *Proyectos disponibles:*\n"]
-        for entry in sorted(parent.iterdir()):
-            if entry.is_dir() and (entry / ".git").exists():
-                name = entry.name
-                if name in seen:
-                    continue
-                seen.add(name)
-                marker = "🟢" if str(entry) == str(current_path) else "  "
-                alias = name.lower().replace(" ", "-").split("-")[0]
-                lines.append(f"{marker} `{alias}` → {name}")
-        await sender.send_plain(chat_id, "\n".join(lines))
-        return
-
-    # Switch to project
-    query = " ".join(args).lower().replace(" ", "-")
-    target = projects.get(query)
-
-    if target is None:
-        # Try partial match
-        matches = [k for k in projects if k.startswith(query)]
-        if len(matches) == 1:
-            target = projects[matches[0]]
-        elif len(matches) > 1:
-            match_list = ", ".join(matches[:5])
-            await sender.send_plain(
-                chat_id, f"⚠️ Múltiples coincidencias: {match_list}. Sé más específico."
-            )
-            return
-        else:
-            await sender.send_plain(chat_id, f"❌ Proyecto no encontrado: `{query}`")
-            return
-
-    workdir = str(target)
-    await store.set_chat_setting(key, "workdir", workdir)
-    await sender.send_plain(
-        chat_id, f"✅ Workdir cambiado a:\n`{workdir}`\n\nEl próximo prompt usará este proyecto."
-    )
+    await sender.send_plain(chat_id, text)

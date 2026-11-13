@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from services.session_store import SessionStore
     from services.settings_service import SettingsService
     from services.status_service import StatusService
+    from services.workdir_service import WorkdirService
 
 
 @dataclass
@@ -38,6 +39,7 @@ class AppContainer:
     health_service: HealthService
     session_service: SessionService
     settings_service: SettingsService
+    workdir_service: WorkdirService
     bot_port: BotPort
     start_time: float
     allowed_chat_ids: list[int]

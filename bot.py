@@ -381,6 +381,7 @@ async def run_bot() -> None:
         health_service=core.health_service,
         session_service=core.session_service,
         settings_service=core.settings_service,
+        workdir_service=core.workdir_service,
         bot_port=bot_port,
         start_time=core.start_time,
         allowed_chat_ids=ALLOWED_CHAT_IDS,

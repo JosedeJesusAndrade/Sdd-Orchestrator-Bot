@@ -21,6 +21,7 @@ import pytest
 import core_config
 from frontends.telegram.keys import telegram_key
 from handlers.ci import wdir_command
+from services.workdir_service import WorkdirService
 from tests.handler_fakes import (
     CHAT_ID,
     FakeChatSettingsStore,
@@ -47,7 +48,11 @@ async def _run(
     args: list[str] | None,
 ) -> FakeSender:
     sender = FakeSender()
-    container = SimpleNamespace(message_sender=sender, session_store=store)
+    container = SimpleNamespace(
+        message_sender=sender,
+        session_store=store,
+        workdir_service=WorkdirService(store),
+    )
     await wdir_command(make_update(FakeMessage()), make_context(container, args=args))
     return sender
 
