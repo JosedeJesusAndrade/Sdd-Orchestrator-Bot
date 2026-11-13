@@ -1,10 +1,10 @@
 # Sdd-Orchestrator-Telegram-Bot
 
-Telegram bridge for OpenCode CLI. Ejecuta prompts de desarrollo contra múltiples proveedores de IA (DeepSeek, MiniMax) directamente desde una conversación de Telegram, con persistencia de sesiones, internacionalización centralizada y arranque desatendido vía `/update`.
+Frontends de Telegram y Flet para OpenCode. Ejecuta prompts de desarrollo contra múltiples modelos (DeepSeek, MiniMax) directamente desde una conversación de Telegram, con persistencia de sesiones, internacionalización centralizada y arranque desatendido vía `/update`.
 
 ## Descripción
 
-`Sdd-Orchestrator-Telegram-Bot` es una aplicación Python que conecta Telegram con el ejecutable de OpenCode CLI para habilitar desarrollo asistido por IA desde dispositivos móviles. El bot recibe mensajes de texto o voz en un chat autorizado, los reenvía al backend de IA configurado y devuelve la respuesta formateada a Telegram.
+`Sdd-Orchestrator-Telegram-Bot` es una aplicación Python que conecta Telegram con el agente OpenCode (servidor HTTP por defecto, CLI como rollback) para habilitar desarrollo asistido por IA desde dispositivos móviles. El bot recibe mensajes de texto o voz en un chat autorizado, los reenvía al backend de IA configurado y devuelve la respuesta formateada a Telegram.
 
 El proyecto existe para ofrecer un punto de acceso móvil a flujos de trabajo de Spec-Driven Development. En lugar de depender de una terminal local, el usuario envía prompts desde el teléfono, gestiona sesiones por chat, cambia de modelo, crea Pull Requests y actualiza el bot sin abrir una laptop.
 
@@ -13,7 +13,7 @@ La arquitectura es un **core frontend-agnóstico**: la lógica de negocio vive e
 ## Características
 
 - Múltiples sesiones por chat, con persistencia en `sessions.json` y cambio explícito entre sesiones activas
-- Multi-proveedor mediante `AIProviderFactory` (DeepSeek `pro`/`flash`, MiniMax `m3`/`m27`/`m27-fast`)
+- Multi-modelo mediante `AIProviderFactory` y alias (DeepSeek `pro`/`flash`, MiniMax `m3`/`m27`/`m27-fast`); hoy solo se registra el provider `opencode`
 - Comandos de CI/CD desde Telegram: `/pr` crea un Pull Request con `gh`, `/update` reinicia el bot con la última versión
 - i18n centralizada en `locales/es.py`, accesible vía `get_strings()`
 - `SessionStore` thread-safe como única fuente de verdad para el estado
@@ -69,7 +69,7 @@ Este comando instala las dependencias de runtime y de desarrollo (ruff, mypy, py
 ### 4. Instalar OpenCode CLI
 
 ```bash
-npm install -g @anthropic/opencode
+npm install -g opencode-ai
 ```
 
 Verifica la instalación con `opencode --version`.
@@ -318,7 +318,8 @@ Comandos equivalentes disponibles desde Telegram:
 | Comando | Efecto |
 |---|---|
 | `/pr <título>` | Lee el `CHANGELOG.md` del workdir del chat y crea un PR con `gh pr create` |
-| `/update` | Ejecuta `os._exit(42)`; `launcher.bat` detecta el código y corre `git pull` seguido de un reinicio limpio |
+| `/update` | Activa el apagado graceful con `exit_code=42`; `launcher.bat` detecta el código y corre `git pull` seguido de un reinicio limpio |
+
 Flujo de auto-restart:
 
 ```text
