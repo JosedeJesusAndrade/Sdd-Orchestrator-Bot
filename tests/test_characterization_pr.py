@@ -1,11 +1,11 @@
-"""Characterization tests for ``/pr`` (``handlers/ci.py``).
+"""Characterization tests for ``/pr`` (``PullRequestService`` + handler).
 
 Pins the pure branch sanitizer, both subprocess runners, the CHANGELOG body
-lifecycle and the five-stage PR flow (including the typed error mapping) so
-the upcoming ``PullRequestService`` extraction cannot change behavior.
+lifecycle and the five-stage PR flow (including the typed error mapping) so the
+``PullRequestService`` extraction cannot change behavior.
 
 No live ``git``/``gh``: both runners are replaced with fakes that record every
-call and return scripted ``(returncode, stdout, stderr)`` tuples.
+call and return scripted ``CommandResult`` tuples.
 """
 
 from __future__ import annotations
@@ -17,8 +17,13 @@ from typing import Any
 
 import pytest
 
-from handlers import ci
-from handlers.ci import _sanitize_branch_name, pr_command
+from handlers.ci import pr_command
+from services.pull_request_service import (
+    CommandResult,
+    PullRequestService,
+    SubprocessCommandRunner,
+    sanitize_branch_name,
+)
 from tests.handler_fakes import (
     FakeChatSettingsStore,
     FakeMessage,
@@ -40,16 +45,16 @@ from tests.handler_fakes import (
     ],
 )
 def test_sanitize_branch_name_formats_title(title: str, expected: str) -> None:
-    assert _sanitize_branch_name(title) == expected
+    assert sanitize_branch_name(title) == expected
 
 
 def test_sanitize_branch_name_truncates_to_fifty_chars() -> None:
-    assert _sanitize_branch_name("a" * 80) == "a" * 50
+    assert sanitize_branch_name("a" * 80) == "a" * 50
 
 
 @pytest.mark.parametrize("title", ["", "!!!", "   "])
 def test_sanitize_branch_name_falls_back_to_update(title: str) -> None:
-    assert _sanitize_branch_name(title) == "update"
+    assert sanitize_branch_name(title) == "update"
 
 
 # ── Subprocess runners ─────────────────────────────────────────────────
@@ -74,9 +79,9 @@ async def test_run_git_command_decodes_strips_and_pipes(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    rc, out, err = await ci._run_git_command("C:/repo", "status")
+    result = await SubprocessCommandRunner("git").run("C:/repo", "status")
 
-    assert (rc, out, err) == (0, "main", "warn")
+    assert (result.returncode, result.stdout, result.stderr) == (0, "main", "warn")
     assert calls[0][0] == ("git", "status")
     kwargs = calls[0][1]
     assert kwargs["cwd"] == "C:/repo"
@@ -90,11 +95,11 @@ async def test_run_git_command_replaces_invalid_utf8(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    rc, out, err = await ci._run_git_command("C:/repo", "log")
+    result = await SubprocessCommandRunner("git").run("C:/repo", "log")
 
-    assert rc == 0
-    assert out == "caf\ufffd"
-    assert err == ""
+    assert result.returncode == 0
+    assert result.stdout == "caf\ufffd"
+    assert result.stderr == ""
 
 
 async def test_run_gh_command_uses_resolved_executable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,12 +109,11 @@ async def test_run_gh_command_uses_resolved_executable(monkeypatch: pytest.Monke
         calls.append(args)
         return _Proc(0, b"out", b"")
 
-    monkeypatch.setattr(ci, "_resolve_gh", lambda: "C:/fake/gh.exe")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    rc, out, err = await ci._run_gh_command("C:/repo", "pr", "list")
+    result = await SubprocessCommandRunner(lambda: "C:/fake/gh.exe").run("C:/repo", "pr", "list")
 
-    assert (rc, out, err) == (0, "out", "")
+    assert (result.returncode, result.stdout, result.stderr) == (0, "out", "")
     assert calls[0] == ("C:/fake/gh.exe", "pr", "list")
 
 
@@ -117,15 +121,16 @@ async def test_run_gh_command_uses_resolved_executable(monkeypatch: pytest.Monke
 
 
 class _FakeRunner:
-    """Scripted async runner matching ``_run_git_command``'s signature."""
+    """Scripted async runner matching the ``CommandRunner`` port."""
 
     def __init__(self, results: list[tuple[int, str, str]] | None = None) -> None:
         self.results = list(results or [])
         self.calls: list[tuple[str, tuple[str, ...]]] = []
 
-    async def __call__(self, workdir: str, *args: str) -> tuple[int, str, str]:
-        self.calls.append((workdir, args))
-        return self.results.pop(0) if self.results else (0, "", "")
+    async def run(self, cwd: str, *args: str) -> CommandResult:
+        self.calls.append((cwd, args))
+        rc, out, err = self.results.pop(0) if self.results else (0, "", "")
+        return CommandResult(returncode=rc, stdout=out, stderr=err)
 
 
 def _wire(
@@ -134,21 +139,20 @@ def _wire(
     *,
     git: _FakeRunner,
     gh: _FakeRunner,
-) -> tuple[FakeMessage, FakeSender, FakeChatSettingsStore]:
+) -> tuple[FakeMessage, FakeSender, PullRequestService]:
     store = FakeChatSettingsStore({"workdir": str(workdir)})
     sender = FakeSender()
-    monkeypatch.setattr(ci, "_run_git_command", git)
-    monkeypatch.setattr(ci, "_run_gh_command", gh)
-    return FakeMessage(), sender, store
+    service = PullRequestService(store, git=git, gh=gh)
+    return FakeMessage(), sender, service
 
 
 async def _run_pr(
     msg: FakeMessage,
-    store: FakeChatSettingsStore,
+    service: PullRequestService,
     sender: FakeSender,
     args: list[str] | None,
 ) -> None:
-    container = SimpleNamespace(message_sender=sender, session_store=store)
+    container = SimpleNamespace(message_sender=sender, pull_request_service=service)
     await pr_command(make_update(msg), make_context(container, args=args))
 
 
@@ -158,9 +162,9 @@ async def test_pr_happy_path_runs_all_stages(
     (tmp_path / "CHANGELOG.md").write_text("Ship it", encoding="utf-8")
     git = _FakeRunner([(0, "", "")] * 5)
     gh = _FakeRunner([(0, "https://github.com/acme/repo/pull/7", "")])
-    msg, sender, store = _wire(monkeypatch, tmp_path, git=git, gh=gh)
+    msg, sender, service = _wire(monkeypatch, tmp_path, git=git, gh=gh)
 
-    await _run_pr(msg, store, sender, ["Add", "Login"])
+    await _run_pr(msg, service, sender, ["Add", "Login"])
 
     workdir = str(tmp_path)
     checkout_call = git.calls[0]
@@ -209,9 +213,9 @@ async def test_pr_defaults_title_and_body_without_changelog(
 ) -> None:
     git = _FakeRunner([(0, "", "")] * 5)
     gh = _FakeRunner([(0, "no url here", "")])
-    msg, sender, store = _wire(monkeypatch, tmp_path, git=git, gh=gh)
+    msg, sender, service = _wire(monkeypatch, tmp_path, git=git, gh=gh)
 
-    await _run_pr(msg, store, sender, None)
+    await _run_pr(msg, service, sender, None)
 
     branch = git.calls[0][1][2]
     assert branch.startswith("feature/update-from-telegram-")
@@ -230,9 +234,9 @@ async def test_pr_nothing_to_commit_returns_to_main(
         [(0, "", ""), (0, "", ""), (1, "", "nothing to commit, working tree clean"), (0, "", "")]
     )
     gh = _FakeRunner()
-    msg, sender, store = _wire(monkeypatch, tmp_path, git=git, gh=gh)
+    msg, sender, service = _wire(monkeypatch, tmp_path, git=git, gh=gh)
 
-    await _run_pr(msg, store, sender, ["Doc"])
+    await _run_pr(msg, service, sender, ["Doc"])
 
     assert "No hay cambios para commitear" in sender.plain_texts[-1]
     assert gh.calls == []
@@ -256,9 +260,9 @@ async def test_pr_stage_failures_map_to_typed_messages(
 ) -> None:
     git = _FakeRunner(results)
     gh = _FakeRunner()
-    msg, sender, store = _wire(monkeypatch, tmp_path, git=git, gh=gh)
+    msg, sender, service = _wire(monkeypatch, tmp_path, git=git, gh=gh)
 
-    await _run_pr(msg, store, sender, ["Feature"])
+    await _run_pr(msg, service, sender, ["Feature"])
 
     assert expected in sender.plain_texts[-1]
     assert gh.calls == []
@@ -269,9 +273,9 @@ async def test_pr_gh_failure_reports_without_returning_to_main(
 ) -> None:
     git = _FakeRunner([(0, "", "")] * 4)
     gh = _FakeRunner([(1, "", "gh boom")])
-    msg, sender, store = _wire(monkeypatch, tmp_path, git=git, gh=gh)
+    msg, sender, service = _wire(monkeypatch, tmp_path, git=git, gh=gh)
 
-    await _run_pr(msg, store, sender, ["Feature"])
+    await _run_pr(msg, service, sender, ["Feature"])
 
     assert "❌ Error creando PR:" in sender.plain_texts[-1]
     # On gh failure the handler returns before the final ``checkout main``.

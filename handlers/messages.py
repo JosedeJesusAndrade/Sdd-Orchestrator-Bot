@@ -6,8 +6,12 @@ Architecture change (Week 2→3):
 
 Phase 2 logging:
   - Uses per-module logger (`__name__`) instead of the root `config.logger`.
-  - Voice transcription logs DEBUG events (transcribe_voice_skip,
-    transcribe_voice, api_error) with structured fields.
+
+Core-isolation:
+  - The Whisper transcription (and its ``transcribe_voice_skip`` /
+    ``transcribe_voice`` / ``api_error`` / ``voice_transcribe_error`` events)
+    lives in ``services/transcription_service.py``. This handler keeps only the
+    Telegram download and temp-file cleanup, then delegates to the service.
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from core_config import OPENAI_API_KEY
 from frontends.telegram.chat_view import TelegramChatView
 from frontends.telegram.container import AppContainer
 from frontends.telegram.keys import telegram_key
@@ -38,84 +41,6 @@ logger = get_module_logger(__name__)
 def _get_container(context: ContextTypes.DEFAULT_TYPE) -> AppContainer:
     """Extract the typed AppContainer from PTB context."""
     return cast(AppContainer, context.application.bot_data[CONTAINER_KEY])
-
-
-async def transcribe_voice(file_path: str, chat_id: int | None = None) -> str | None:
-    """Transcribe voice audio to text using OpenAI Whisper API.
-
-    Phase 2 logging:
-      - DEBUG event=transcribe_voice_skip when API key missing (was WARNING)
-      - DEBUG event=transcribe_voice on entry (with chat_id_masked)
-      - ERROR event=api_error on OpenAI/HTTP failures (provider=openai)
-      - ERROR event=voice_transcribe_error for other failures
-    """
-    masked_cid = mask_chat_id(chat_id) if chat_id is not None else "-"
-
-    if not OPENAI_API_KEY:
-        # Downgraded to DEBUG — this is a config detail, not a runtime event.
-        # Operators check OPENAI_API_KEY during deployment, not at runtime.
-        logger.debug(
-            "OPENAI_API_KEY not set — skipping voice transcription",
-            extra={"event": "transcribe_voice_skip", "chat_id_masked": masked_cid},
-        )
-        return None
-
-    logger.debug(
-        "Transcribe voice",
-        extra={"event": "transcribe_voice", "chat_id_masked": masked_cid},
-    )
-
-    try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-        with open(file_path, "rb") as audio_file:
-            transcript = await client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text",
-            )
-
-        return transcript.strip() if transcript else None
-
-    except ImportError:
-        logger.error(
-            "openai package not installed",
-            extra={
-                "event": "voice_transcribe_error",
-                "chat_id_masked": masked_cid,
-                "error_type": "ImportError",
-                "hint": "Run: pip install openai",
-            },
-        )
-        return None
-    except Exception as e:
-        # Differentiate API errors (HTTP) from other failures.
-        # openai package raises APIStatusError for HTTP 4xx/5xx.
-        status = getattr(e, "status_code", None)
-        if status is not None:
-            logger.error(
-                "Voice transcription API error",
-                extra={
-                    "event": "api_error",
-                    "provider": "openai",
-                    "status": status,
-                    "error": str(e),
-                    "chat_id_masked": masked_cid,
-                },
-            )
-        else:
-            logger.error(
-                "Voice transcription failed",
-                extra={
-                    "event": "voice_transcribe_error",
-                    "chat_id_masked": masked_cid,
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                },
-            )
-        return None
 
 
 @authorized
@@ -146,7 +71,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             temp_path = tmp.name
         await file.download_to_drive(temp_path)
 
-        text = await transcribe_voice(temp_path, chat_id=chat_id)
+        text = await container.transcription_service.transcribe(
+            temp_path, key=telegram_key(chat_id)
+        )
 
         if not text:
             await progress_msg.edit_text(

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from core_config import (
     BASE_DIR,
+    OPENAI_API_KEY,
     OPENCODE_BACKEND,
     OPENCODE_CMD,
     OPENCODE_PERMISSION_TIMEOUT,
@@ -45,10 +46,12 @@ from services.opencode_server_backend import OpenCodeServerBackend
 from services.permission_router import PermissionRouter
 from services.permissions import PermissionPort
 from services.prompt_service import PromptService
+from services.pull_request_service import PullRequestService, default_runners
 from services.session_service import SessionService
 from services.session_store import SessionStore
 from services.settings_service import SettingsService
 from services.status_service import StatusService
+from services.transcription_service import TranscriptionService, WhisperTranscriber
 from services.workdir_service import WorkdirService
 
 
@@ -68,6 +71,8 @@ class CoreStack:
     session_service: SessionService
     settings_service: SettingsService
     workdir_service: WorkdirService
+    pull_request_service: PullRequestService
+    transcription_service: TranscriptionService
     agent_sessions: AgentSessions
     conversations_service: ConversationsService
     start_time: float
@@ -193,6 +198,8 @@ def build_prompt_stack(
         session_store,
     )
 
+    git_runner, gh_runner = default_runners()
+
     return CoreStack(
         session_store=session_store,
         provider_factory=provider_factory,
@@ -202,6 +209,10 @@ def build_prompt_stack(
         session_service=session_service,
         settings_service=SettingsService(session_store),
         workdir_service=WorkdirService(session_store, root=Path(workdir)),
+        pull_request_service=PullRequestService(session_store, git=git_runner, gh=gh_runner),
+        transcription_service=TranscriptionService(
+            WhisperTranscriber(OPENAI_API_KEY), enabled=bool(OPENAI_API_KEY)
+        ),
         agent_sessions=agent_sessions,
         conversations_service=conversations_service,
         start_time=resolved_start_time,

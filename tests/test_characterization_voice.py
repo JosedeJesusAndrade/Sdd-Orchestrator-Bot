@@ -1,12 +1,13 @@
-"""Characterization tests for voice handling (``handlers/messages.py``).
+"""Characterization tests for voice handling (``TranscriptionService`` + handler).
 
 Two surfaces:
-  * ``transcribe_voice`` — the OpenAI Whisper call, the no-key skip and the
+  * ``TranscriptionService`` — the OpenAI Whisper call, the no-key skip and the
     three error mappings (all with a fake ``openai`` module in ``sys.modules``).
   * ``handle_voice`` — duration guard, progress edits, and delegation of the
     transcript to ``PromptService.execute``.
 
-No network: the OpenAI client and ``transcribe_voice`` are replaced by fakes.
+No network: the OpenAI client and the ``TranscriptionService`` are replaced by
+fakes.
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ import pytest
 from frontends.telegram.chat_view import TelegramChatView
 from frontends.telegram.keys import telegram_key
 from handlers import messages
+from services import transcription_service
 from services.prompt_service import PromptAlreadyRunningError
+from services.transcription_service import TranscriptionService, WhisperTranscriber
 from tests.handler_fakes import (
     CHAT_ID,
     FakeMessage,
@@ -66,18 +69,19 @@ def _install_openai(monkeypatch: pytest.MonkeyPatch, create: Any) -> None:
 def logger(monkeypatch: pytest.MonkeyPatch) -> _FakeLogger:
     fake = _FakeLogger()
     monkeypatch.setattr(messages, "logger", fake)
+    monkeypatch.setattr(transcription_service, "logger", fake)
     return fake
 
 
-# ── transcribe_voice ────────────────────────────────────────────────────
+# ── TranscriptionService ────────────────────────────────────────────────
 
 
 async def test_transcribe_without_api_key_skips(
     monkeypatch: pytest.MonkeyPatch, logger: _FakeLogger
 ) -> None:
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "")
+    service = TranscriptionService(WhisperTranscriber(""), enabled=False)
 
-    result = await messages.transcribe_voice("unused.ogg", chat_id=123)
+    result = await service.transcribe("unused.ogg", key=telegram_key(123))
 
     assert result is None
     assert "transcribe_voice_skip" in logger.events
@@ -96,9 +100,9 @@ async def test_transcribe_returns_the_stripped_transcript(
         return "  hello world \n"
 
     _install_openai(monkeypatch, create)
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    result = await messages.transcribe_voice(str(audio), chat_id=1)
+    result = await service.transcribe(str(audio), key=telegram_key(1))
 
     assert result == "hello world"
     assert captured["model"] == "whisper-1"
@@ -117,9 +121,9 @@ async def test_transcribe_empty_response_returns_none(
         return ""
 
     _install_openai(monkeypatch, create)
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    assert await messages.transcribe_voice(str(audio), chat_id=1) is None
+    assert await service.transcribe(str(audio), key=telegram_key(1)) is None
 
 
 async def test_transcribe_whitespace_response_is_empty_string(
@@ -133,9 +137,9 @@ async def test_transcribe_whitespace_response_is_empty_string(
         return "   \n"
 
     _install_openai(monkeypatch, create)
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    assert await messages.transcribe_voice(str(audio), chat_id=1) == ""
+    assert await service.transcribe(str(audio), key=telegram_key(1)) == ""
 
 
 async def test_transcribe_api_error_maps_to_api_error_event(
@@ -151,9 +155,9 @@ async def test_transcribe_api_error_maps_to_api_error_event(
         raise _ApiError("server exploded")
 
     _install_openai(monkeypatch, create)
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    result = await messages.transcribe_voice(str(audio), chat_id=1)
+    result = await service.transcribe(str(audio), key=telegram_key(1))
 
     assert result is None
     record = next(r for r in logger.records if r[2].get("event") == "api_error")
@@ -171,9 +175,9 @@ async def test_transcribe_generic_error_maps_to_voice_transcribe_error(
         raise RuntimeError("boom")
 
     _install_openai(monkeypatch, create)
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    result = await messages.transcribe_voice(str(audio), chat_id=1)
+    result = await service.transcribe(str(audio), key=telegram_key(1))
 
     assert result is None
     record = next(r for r in logger.records if r[2].get("event") == "voice_transcribe_error")
@@ -187,11 +191,11 @@ async def test_transcribe_import_error_maps_to_voice_transcribe_error(
     audio.write_bytes(b"x")
 
     # A module without ``AsyncOpenAI`` makes ``from openai import ...`` raise
-    # ImportError, exercising the handler's ImportError branch.
+    # ImportError, exercising the service's ImportError branch.
     monkeypatch.setitem(sys.modules, "openai", types.ModuleType("openai"))
-    monkeypatch.setattr(messages, "OPENAI_API_KEY", "sk-test")
+    service = TranscriptionService(WhisperTranscriber("sk-test"))
 
-    result = await messages.transcribe_voice(str(audio), chat_id=1)
+    result = await service.transcribe(str(audio), key=telegram_key(1))
 
     assert result is None
     record = next(r for r in logger.records if r[2].get("event") == "voice_transcribe_error")
@@ -225,14 +229,28 @@ class _FakePromptService:
             raise self._error
 
 
+class _FakeTranscriptionService:
+    def __init__(self, result: str | None) -> None:
+        self.result = result
+        self.calls: list[tuple[str, Any]] = []
+
+    async def transcribe(self, file_path: str, key: Any = None) -> str | None:
+        self.calls.append((file_path, key))
+        return self.result
+
+
 def _voice_message(duration: int) -> FakeMessage:
     msg = FakeMessage()
     msg.voice = _FakeVoice(duration)
     return msg
 
 
-def _container(service: _FakePromptService) -> Any:
-    return SimpleNamespace(message_sender=FakeSender(), prompt_service=service)
+def _container(service: _FakePromptService, transcription: _FakeTranscriptionService) -> Any:
+    return SimpleNamespace(
+        message_sender=FakeSender(),
+        prompt_service=service,
+        transcription_service=transcription,
+    )
 
 
 async def test_voice_delegates_transcript_to_prompt_service(
@@ -240,13 +258,9 @@ async def test_voice_delegates_transcript_to_prompt_service(
 ) -> None:
     msg = _voice_message(2)
     service = _FakePromptService()
+    transcription = _FakeTranscriptionService("hola mundo")
 
-    async def fake_transcribe(path: str, chat_id: int | None = None) -> str:
-        return "hola mundo"
-
-    monkeypatch.setattr(messages, "transcribe_voice", fake_transcribe)
-
-    await messages.handle_voice(make_update(msg), make_context(_container(service)))
+    await messages.handle_voice(make_update(msg), make_context(_container(service, transcription)))
 
     assert len(service.calls) == 1
     conversation_id, prompt_text, view = service.calls[0]
@@ -260,18 +274,12 @@ async def test_voice_too_short_reports_without_transcribing(
 ) -> None:
     msg = _voice_message(0)
     service = _FakePromptService()
-    transcribed: list[bool] = []
+    transcription = _FakeTranscriptionService("x")
 
-    async def fake_transcribe(path: str, chat_id: int | None = None) -> str:
-        transcribed.append(True)
-        return "x"
-
-    monkeypatch.setattr(messages, "transcribe_voice", fake_transcribe)
-
-    await messages.handle_voice(make_update(msg), make_context(_container(service)))
+    await messages.handle_voice(make_update(msg), make_context(_container(service, transcription)))
 
     assert msg.reply_texts[-1] == "El audio es muy corto, no se detectó voz."
-    assert transcribed == []
+    assert transcription.calls == []
     assert service.calls == []
 
 
@@ -280,13 +288,9 @@ async def test_voice_without_transcript_reports_failure(
 ) -> None:
     msg = _voice_message(2)
     service = _FakePromptService()
+    transcription = _FakeTranscriptionService(None)
 
-    async def fake_transcribe(path: str, chat_id: int | None = None) -> str | None:
-        return None
-
-    monkeypatch.setattr(messages, "transcribe_voice", fake_transcribe)
-
-    await messages.handle_voice(make_update(msg), make_context(_container(service)))
+    await messages.handle_voice(make_update(msg), make_context(_container(service, transcription)))
 
     assert "No pude transcribir el audio" in msg.edit_texts[-1]
     assert service.calls == []
@@ -297,13 +301,9 @@ async def test_voice_busy_prompt_reports_and_logs(
 ) -> None:
     msg = _voice_message(2)
     service = _FakePromptService(error=PromptAlreadyRunningError())
+    transcription = _FakeTranscriptionService("hola")
 
-    async def fake_transcribe(path: str, chat_id: int | None = None) -> str:
-        return "hola"
-
-    monkeypatch.setattr(messages, "transcribe_voice", fake_transcribe)
-
-    await messages.handle_voice(make_update(msg), make_context(_container(service)))
+    await messages.handle_voice(make_update(msg), make_context(_container(service, transcription)))
 
     assert any("Ya hay un prompt en proceso" in text for text in msg.reply_texts)
 
@@ -313,13 +313,9 @@ async def test_voice_generic_error_reports_and_logs(
 ) -> None:
     msg = _voice_message(2)
     service = _FakePromptService(error=RuntimeError("boom"))
+    transcription = _FakeTranscriptionService("hola")
 
-    async def fake_transcribe(path: str, chat_id: int | None = None) -> str:
-        return "hola"
-
-    monkeypatch.setattr(messages, "transcribe_voice", fake_transcribe)
-
-    await messages.handle_voice(make_update(msg), make_context(_container(service)))
+    await messages.handle_voice(make_update(msg), make_context(_container(service, transcription)))
 
     assert "Error al procesar el audio" in msg.edit_texts[-1]
     assert "voice_handler_error" in logger.events

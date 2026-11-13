@@ -6,10 +6,6 @@ These commands enable the full CI/CD pipeline from the street:
   /wdir [project] — List or switch OpenCode workdir (project folder)
 """
 
-import asyncio
-import os
-import re
-from pathlib import Path
 from typing import cast
 
 from telegram import Update
@@ -19,6 +15,10 @@ from frontends.telegram.container import AppContainer
 from frontends.telegram.keys import telegram_key
 from handlers import authorized
 from handlers._guards import require_chat
+from services.pull_request_service import (
+    NothingToCommitError,
+    PullRequestError,
+)
 from services.workdir_service import (
     AmbiguousWorkdirError,
     ProjectsSnapshot,
@@ -36,158 +36,54 @@ def _get_container(context: ContextTypes.DEFAULT_TYPE) -> AppContainer:
     return cast(AppContainer, context.application.bot_data[CONTAINER_KEY])
 
 
-async def _run_git_command(workdir: str, *args: str) -> tuple[int, str, str]:
-    """Execute a git command and return (returncode, stdout, stderr)."""
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=workdir,
-    )
-    stdout, stderr = await proc.communicate()
-    return (
-        proc.returncode or 0,
-        stdout.decode("utf-8", errors="replace").strip() if stdout else "",
-        stderr.decode("utf-8", errors="replace").strip() if stderr else "",
-    )
+_PR_STAGE_ERRORS: dict[str, str] = {
+    "branch": "❌ Error creando rama:\n`{err}`",
+    "add": "❌ Error en git add:\n`{err}`",
+    "commit": "❌ Error en commit:\n`{err}`",
+    "push": "❌ Error en push:\n`{err}`",
+    "pr": "❌ Error creando PR:\n`{err}`",
+}
 
 
-def _resolve_gh() -> str:
-    """Find gh executable. Tries PATH first, then known Windows install paths."""
-    import shutil
-
-    candidates = [
-        shutil.which("gh"),
-        shutil.which("gh.exe"),
-        r"C:\Program Files\GitHub CLI\gh.exe",
-        r"C:\Program Files (x86)\GitHub CLI\gh.exe",
-        os.path.expanduser(r"~\AppData\Local\Microsoft\WindowsApps\gh.exe"),
-    ]
-    for path in candidates:
-        if path and os.path.isfile(path):
-            return path
-    return "gh"
-
-
-async def _run_gh_command(workdir: str, *args: str) -> tuple[int, str, str]:
-    """Execute a gh (GitHub CLI) command."""
-    gh_cmd = _resolve_gh()
-    proc = await asyncio.create_subprocess_exec(
-        gh_cmd,
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=workdir,
-    )
-    stdout, stderr = await proc.communicate()
-    return (
-        proc.returncode or 0,
-        stdout.decode("utf-8", errors="replace").strip() if stdout else "",
-        stderr.decode("utf-8", errors="replace").strip() if stderr else "",
-    )
-
-
-def _sanitize_branch_name(title: str) -> str:
-    """Convert a PR title into a valid git branch name."""
-    name = title.lower().strip()
-    name = re.sub(r"[^a-z0-9\s_-]", "", name)
-    name = re.sub(r"\s+", "-", name)
-    return name[:50] or "update"
+def _format_pr_error(error: PullRequestError) -> str:
+    """Map a typed stage error to the Telegram copy."""
+    template = _PR_STAGE_ERRORS.get(error.stage, _PR_STAGE_ERRORS["pr"])
+    return template.format(err=error.stderr)
 
 
 @authorized
 async def pr_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Create a GitHub PR: /pr <title>
 
-    Uses per-chat workdir from settings. Reads CHANGELOG.md for PR body.
-    Executes: git checkout -b → git add → git commit → git push → gh pr create
+    Thin adapter: parse the title, delegate to ``PullRequestService`` and render
+    the typed result/error. The git/gh pipeline and the CHANGELOG lifecycle live
+    in ``services/pull_request_service.py`` so other frontends can reuse them.
     """
     chat_id = require_chat(update).id
     key = telegram_key(chat_id)
     container = _get_container(context)
     sender = container.message_sender
-    store = container.session_store
+    service = container.pull_request_service
 
-    # Get the workdir for this user (Week 4 per-chat config)
-    workdir = await store.get_chat_setting(key, "workdir", os.getcwd())
-
-    # Parse PR title
     title = " ".join(context.args) if context.args else "Update from Telegram"
-    branch_name = f"feature/{_sanitize_branch_name(title)}-{os.urandom(2).hex()}"
-
-    # Build PR body from CHANGELOG.md if it exists
-    changelog_path = Path(workdir) / "CHANGELOG.md"
-    if changelog_path.exists():
-        body = changelog_path.read_text(encoding="utf-8", errors="replace")
-        # Clean up the changelog after reading
-        changelog_path.unlink()
-    else:
-        body = "PR generated via Telegram Bot."
+    branch_name = service.new_branch_name(title)
 
     await sender.send_plain(chat_id, f"📦 Creando PR: *{title[:80]}*...\nRama: `{branch_name}`")
 
-    # Step 1: Create branch
-    ret, out, err = await _run_git_command(workdir, "checkout", "-b", branch_name)
-    if ret != 0:
-        await sender.send_plain(chat_id, f"❌ Error creando rama:\n`{err}`")
+    try:
+        result = await service.create(key, title, branch_name=branch_name)
+    except NothingToCommitError:
+        await sender.send_plain(chat_id, "⚠️ No hay cambios para commitear.")
         return
-
-    # Step 2: Stage all changes
-    ret, out, err = await _run_git_command(workdir, "add", ".")
-    if ret != 0:
-        await sender.send_plain(chat_id, f"❌ Error en git add:\n`{err}`")
+    except PullRequestError as error:
+        await sender.send_plain(chat_id, _format_pr_error(error))
         return
-
-    # Step 3: Commit
-    ret, out, err = await _run_git_command(workdir, "commit", "-m", title)
-    if ret != 0:
-        # Check if nothing to commit (no changes)
-        if "nothing to commit" in (out + err).lower():
-            await sender.send_plain(chat_id, "⚠️ No hay cambios para commitear.")
-            await _run_git_command(workdir, "checkout", "main")
-            return
-        await sender.send_plain(chat_id, f"❌ Error en commit:\n`{err}`")
-        return
-
-    # Step 4: Push
-    ret, out, err = await _run_git_command(workdir, "push", "-u", "origin", branch_name)
-    if ret != 0:
-        await sender.send_plain(chat_id, f"❌ Error en push:\n`{err}`")
-        return
-
-    # Step 5: Create PR via GitHub CLI
-    ret, out, err = await _run_gh_command(
-        workdir,
-        "pr",
-        "create",
-        "--title",
-        title,
-        "--body",
-        body,
-        "--base",
-        "main",
-        "--head",
-        branch_name,
-    )
-    if ret != 0:
-        await sender.send_plain(chat_id, f"❌ Error creando PR:\n`{err}`")
-        return
-
-    # Extract PR URL from gh output
-    pr_url = ""
-    for line in out.split("\n"):
-        if "github.com" in line and "/pull/" in line:
-            pr_url = line.strip()
-            break
 
     await sender.send_plain(
         chat_id,
-        f"✅ PR creada exitosamente.\n\n📝 *Título:* {title[:100]}\n🔗 {pr_url or out[:200]}",
+        f"✅ PR creada exitosamente.\n\n📝 *Título:* {result.title[:100]}\n"
+        f"🔗 {result.url or result.output[:200]}",
     )
-
-    # Return to main
-    await _run_git_command(workdir, "checkout", "main")
 
 
 @authorized

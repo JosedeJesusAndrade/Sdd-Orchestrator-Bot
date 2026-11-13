@@ -31,6 +31,8 @@ def test_core_modules_are_ptb_free() -> None:
         "services.settings_service",
         "services.workdir_service",
         "services.session_commands",
+        "services.pull_request_service",
+        "services.transcription_service",
         "formatting.markdown",
     ):
         returncode, loaded = probe_import(module)
