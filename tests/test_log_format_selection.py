@@ -36,8 +36,8 @@ def _run_config_probe(
             sys.executable,
             "-c",
             (
-                "import config; config.setup_logger(); "
-                "print(type(config.logger.handlers[0].formatter).__name__)"
+                "import core_config; core_config.setup_logger(); "
+                "print(type(core_config.logger.handlers[0].formatter).__name__)"
             ),
         ],
         cwd=PROJECT_ROOT,
@@ -81,8 +81,8 @@ def test_env_json_handler_emits_json_lines(tmp_path: Path) -> None:
         "BOT_LOG_FORMAT": "json",
     }
     script = (
-        "import config; config.setup_logger(); "
-        "config.logger.info('hola', extra={'event': 'probe_json', 'n': 7})"
+        "import core_config; core_config.setup_logger(); "
+        "core_config.logger.info('hola', extra={'event': 'probe_json', 'n': 7})"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],

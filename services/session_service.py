@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from config import INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
+from core_config import INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
 from opencode.client import query_opencode_db
 from persistence.sessions import (
     fetch_opencode_sessions,

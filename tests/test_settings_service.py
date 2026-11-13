@@ -14,7 +14,7 @@ from typing import Any, cast
 
 import pytest
 
-from config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR
+from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR
 from services.session_store import SessionStore
 from services.settings_service import (
     ChatSettings,

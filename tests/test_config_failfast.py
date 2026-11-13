@@ -1,7 +1,8 @@
-"""Tests for the fail-fast ALLOWED_CHAT_IDS validation (roadmap item 4).
+"""Tests for the explicit ALLOWED_CHAT_IDS fail-fast (core-isolation item 3a).
 
-Primary coverage exercises the pure parser. One subprocess test per failure
-mode proves a bad/empty value exits with code 1 WITHOUT killing the runner.
+The fail-fast moved OUT of import time. Merely importing ``telegram_config``
+must succeed even with an empty/invalid allow-list; only the explicit
+``load_telegram_config()`` call (owned by the entry points) exits with code 1.
 """
 
 import os
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from config import parse_allowed_chat_ids
+from telegram_config import parse_allowed_chat_ids
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,7 +35,7 @@ def test_parse_non_numeric_raises_value_error() -> None:
         parse_allowed_chat_ids("abc")
 
 
-def _import_config_with(raw: str) -> subprocess.CompletedProcess[str]:
+def _run_with(raw: str, script: str) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
         "ALLOWED_CHAT_IDS": raw,
@@ -46,7 +47,7 @@ def _import_config_with(raw: str) -> subprocess.CompletedProcess[str]:
         "PYTHONIOENCODING": "utf-8",
     }
     return subprocess.run(
-        [sys.executable, "-c", "import config"],
+        [sys.executable, "-c", script],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -56,8 +57,23 @@ def _import_config_with(raw: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+_IMPORT = "import telegram_config"
+_LOAD = "from telegram_config import load_telegram_config; load_telegram_config()"
+
+
+def test_import_telegram_config_with_invalid_value_is_deferred() -> None:
+    """Importing the view must NEVER fail fast (no import-time SystemExit)."""
+    result = _run_with("not-a-number", _IMPORT)
+    assert result.returncode == 0, result.stderr
+
+
+def test_import_telegram_config_with_empty_value_is_deferred() -> None:
+    result = _run_with("", _IMPORT)
+    assert result.returncode == 0, result.stderr
+
+
 def test_non_numeric_env_value_exits_with_code_1() -> None:
-    result = _import_config_with("not-a-number")
+    result = _run_with("not-a-number", _LOAD)
     assert result.returncode == 1
     # Fail-fast must stay visible even though setup_logger() was never called
     # (import has no logging side effects): the message goes to stderr.
@@ -65,11 +81,11 @@ def test_non_numeric_env_value_exits_with_code_1() -> None:
 
 
 def test_empty_env_value_exits_with_code_1() -> None:
-    result = _import_config_with("")
+    result = _run_with("", _LOAD)
     assert result.returncode == 1
     assert "ALLOWED_CHAT_IDS inválido" in result.stderr
 
 
-def test_valid_env_value_imports_cleanly() -> None:
-    result = _import_config_with("111,222")
-    assert result.returncode == 0
+def test_valid_env_value_loads_cleanly() -> None:
+    result = _run_with("111,222", _LOAD)
+    assert result.returncode == 0, result.stderr

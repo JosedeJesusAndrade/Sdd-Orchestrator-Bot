@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from config import BASE_DIR
+from core_config import BASE_DIR
 from persistence.sessions import fetch_opencode_sessions
 from services.session_store import SessionStore
 from utils.logging import get_module_logger, log_exception

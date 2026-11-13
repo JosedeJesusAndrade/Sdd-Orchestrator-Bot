@@ -99,7 +99,11 @@ def _import_config(extra_env: dict[str, str]) -> subprocess.CompletedProcess[str
         **extra_env,
     }
     return subprocess.run(
-        [sys.executable, "-c", "import config; print(config.OPENCODE_SERVER_ALLOW_REMOTE)"],
+        [
+            sys.executable,
+            "-c",
+            "import core_config; print(core_config.OPENCODE_SERVER_ALLOW_REMOTE)",
+        ],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,

@@ -14,13 +14,13 @@ import pytest
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import ALLOWED_CHAT_IDS, CONTAINER_KEY
 from handlers.permissions import (
     ALREADY_RESOLVED_TOAST,
     INVALID_CALLBACK_TOAST,
     permission_callback,
 )
 from services.permissions import PermissionDecision, Reply
+from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY
 
 
 class _FakeQuery:

@@ -1,11 +1,21 @@
-"""Configuration for Telegram-OpenCode Bridge bot."""
+"""Frontend-agnostic core configuration.
+
+This module is the *core* half of the old ``config.py`` split (item 3a of
+``core-isolation``). It holds everything a headless embedder needs — paths,
+logging, the OpenCode/client settings, OpenAI, models and session storage —
+and it NEVER fails fast at import time. There is no ``ALLOWED_CHAT_IDS`` here
+and no ``SystemExit``: importing ``core_config`` (or any ``services.*`` that
+depend on it) must succeed with zero Telegram environment.
+
+The Telegram-only settings live in ``telegram_config`` (the *view*), which owns
+the explicit ``load_telegram_config()`` fail-fast called by the entry points.
+"""
 
 import logging
 import logging.handlers
 import os
 import sys
 from pathlib import Path
-from typing import NoReturn
 
 from dotenv import load_dotenv
 
@@ -79,7 +89,7 @@ def setup_logger() -> logging.Logger:
 
     logger.setLevel(logging.INFO)
 
-    # Import from utils here to avoid circular import (config is loaded
+    # Import from utils here to avoid circular import (core_config is loaded
     # very early, before utils may be fully initialized).
     from utils.logging import RequestIdFilter, make_formatter
 
@@ -132,75 +142,30 @@ def setup_logger() -> logging.Logger:
 # NOTE: no setup_logger() call here — see the "importing has zero logging side
 # effects" note in the Logging section above. Entry points own the call.
 
-# ─── Telegram ───
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-ALLOWED_CHAT_IDS_RAW = os.getenv("ALLOWED_CHAT_IDS", "")
-
-
-def parse_allowed_chat_ids(raw: str) -> list[int]:
-    """Parse a CSV of chat IDs into a list of ints.
-
-    Pure and side-effect free so the contract is unit-testable without
-    importing/initializing the whole bot. Raises ValueError on any
-    non-numeric entry; the caller turns that into a fatal SystemExit.
-    """
-    return [int(cid.strip()) for cid in raw.split(",") if cid.strip()]
-
-
-def _fail_fast_allowed_chat_ids(raw: str) -> NoReturn:
-    """Report an invalid allow-list and exit without assuming logging exists.
-
-    This runs at import time, before any entry point called setup_logger(), so
-    `logger` normally has no handlers. A logger.critical() alone would only
-    reach logging.lastResort; the explicit stderr write guarantees the operator
-    sees a clear message in every context (daemon, script, test subprocess).
-    If an embedder DID configure handlers before importing config, the
-    structured record goes through them (and thus to its configured file).
-    """
-    message = (
-        "ALLOWED_CHAT_IDS inválido: se esperaba una lista CSV de enteros "
-        f"(ej. '123456789,987654321'). Valor recibido: {raw!r}. "
-        "El bot no puede iniciar sin una allow-list válida."
-    )
-    if logger.handlers:
-        logger.critical(
-            message,
-            extra={"event": "config_allowed_chats_parse_error", "raw": raw},
-            exc_info=True,
-        )
-    else:
-        sys.stderr.write(message + "\n")
-        sys.stderr.flush()
-    raise SystemExit(1)
-
-
-try:
-    ALLOWED_CHAT_IDS = parse_allowed_chat_ids(ALLOWED_CHAT_IDS_RAW)
-    if not ALLOWED_CHAT_IDS:
-        # An empty allow-list is a fatal misconfiguration: the bot would start
-        # and reject every chat silently. Fail fast alongside the parse error.
-        raise ValueError("ALLOWED_CHAT_IDS produced an empty allow-list")
-except ValueError:
-    _fail_fast_allowed_chat_ids(ALLOWED_CHAT_IDS_RAW)
-
 # ─── OpenCode ───
 OPENCODE_WORKDIR = os.getenv("OPENCODE_WORKDIR", str(BASE_DIR))
 OPENCODE_TIMEOUT = int(os.getenv("OPENCODE_TIMEOUT", "300"))
 
 
 def resolve_opencode_cmd() -> str:
-    """Find opencode executable."""
+    """Find the opencode executable.
+
+    Portable by construction: ``shutil.which("opencode")`` is the candidate that
+    resolves on Linux (the production VPS). The ``AppData/Roaming/npm`` entry is
+    only a Windows dev-machine convenience — ``Path.expanduser`` turns it into a
+    non-existent path on Linux, so it degrades gracefully instead of breaking.
+    """
     import shutil
 
-    known_npm_path = os.path.expanduser(r"~\AppData\Roaming\npm\opencode.cmd")
+    known_npm_path = Path(r"~\AppData\Roaming\npm\opencode.cmd").expanduser()
     candidates = [
         ("OPENCODE_CMD env var", os.getenv("OPENCODE_CMD")),
         ("shutil.which('opencode')", shutil.which("opencode")),
         ("shutil.which('opencode.cmd')", shutil.which("opencode.cmd")),
-        ("known npm path", known_npm_path),
+        ("known npm path", str(known_npm_path)),
     ]
     for _source, path in candidates:
-        if path and os.path.isfile(path):
+        if path and Path(path).is_file():
             return path
     return "opencode"
 
@@ -271,11 +236,8 @@ SESSIONS_PATH = SESSION_DB  # alias for SessionStore
 
 # ── Constants  ──────────────────────────────────────
 DEFAULT_SESSION_NAME = "default"
-TELEGRAM_MAX_MESSAGE_LENGTH = 4000
 PROGRESS_UPDATE_INTERVAL = 5  # seconds between "procesando..." updates
-CONNECTIVITY_CHECK_INTERVAL = 30  # seconds between connectivity pings
-CONNECTIVITY_FIRST_CHECK_DELAY = 10  # seconds before first connectivity check
 INTERNAL_SUBPROCESS_TIMEOUT = 10  # seconds for opencode session list / db queries
 
-# ── DI container key (used by AppContainer injection) ───────────────────
-CONTAINER_KEY = "container"
+# DB schema exploration at startup (bot.py). False by default; set EXPLORE_DB=1.
+EXPLORE_DB = os.getenv("EXPLORE_DB", "").lower() in ("1", "true", "yes")

@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from config import OPENCODE_CMD
+from core_config import OPENCODE_CMD
 from services.agent_sessions import ConversationSummary
 from services.session_service import (
     DiscoveredSession,

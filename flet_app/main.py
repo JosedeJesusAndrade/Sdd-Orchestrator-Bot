@@ -24,7 +24,7 @@ if __package__ in (None, ""):
 
 import flet as ft  # noqa: E402
 
-from config import BASE_DIR, DEFAULT_MODEL, setup_logger  # noqa: E402
+from core_config import BASE_DIR, DEFAULT_MODEL, setup_logger  # noqa: E402
 
 # Entry point: attach console + file handlers before anything logs. Importing
 # config/library modules has no logging side effects by design.

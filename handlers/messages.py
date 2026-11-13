@@ -22,12 +22,13 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from config import CONTAINER_KEY, OPENAI_API_KEY
+from core_config import OPENAI_API_KEY
 from handlers import authorized
 from handlers._guards import require_chat, require_message, require_text
 from services.container import AppContainer
 from services.prompt_service import PromptAlreadyRunningError
 from services.telegram_chat_view import TelegramChatView
+from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, log_exception, mask_chat_id
 
 logger = get_module_logger(__name__)

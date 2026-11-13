@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import (
+from core_config import (
     BASE_DIR,
     OPENCODE_BACKEND,
     OPENCODE_CMD,
@@ -102,8 +102,8 @@ def build_prompt_stack(
 ) -> CoreStack:
     """Build the frontend-agnostic core graph.
 
-    Keyword-only, with defaults taken from ``config`` so it is callable as a
-    bare ``build_prompt_stack()`` yet unit-testable by injecting fakes.
+    Keyword-only, with defaults taken from ``core_config`` so it is callable as
+    a bare ``build_prompt_stack()`` yet unit-testable by injecting fakes.
 
     Registers the ``"opencode"`` provider (moved out of ``bot.py``) and owns
     ``start_time`` — both frontends therefore share uptime semantics.

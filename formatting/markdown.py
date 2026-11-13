@@ -2,7 +2,7 @@
 
 import re
 
-from config import TELEGRAM_MAX_MESSAGE_LENGTH
+from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 from utils.logging import get_module_logger
 
 logger = get_module_logger(__name__)

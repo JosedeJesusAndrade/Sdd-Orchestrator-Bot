@@ -1,7 +1,7 @@
 """Regression: importing library modules must NOT write to the production log.
 
 `config.py` used to call `setup_logger()` at module level, so ANY
-`import config` (and therefore `import opencode.client`, the services, or an
+`import core_config` (and therefore `import opencode.client`, the services, or an
 ad-hoc script) attached the real RotatingFileHandler to `bot.log`. These
 subprocess tests leave `BOT_LOG_FILE` unset (so config resolves the production
 path) and assert `bot.log` is byte-for-byte untouched.
@@ -39,7 +39,7 @@ def _run(script: str) -> subprocess.CompletedProcess[str]:
 
 def test_import_config_does_not_touch_bot_log() -> None:
     before = _snapshot()
-    result = _run("import config")
+    result = _run("import core_config")
     assert result.returncode == 0, result.stderr
     assert _snapshot() == before
 
@@ -66,7 +66,7 @@ def test_import_server_lifecycle_does_not_touch_bot_log() -> None:
 
 
 def test_import_does_not_configure_handlers() -> None:
-    result = _run("import config; print(len(config.logger.handlers))")
+    result = _run("import core_config; print(len(core_config.logger.handlers))")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0"
 
@@ -76,8 +76,8 @@ def test_setup_logger_still_writes_to_configured_file(tmp_path: Path) -> None:
     log_file = tmp_path / "app.log"
     env = {**os.environ, "ALLOWED_CHAT_IDS": "111", "BOT_LOG_FILE": str(log_file)}
     script = (
-        "import config; config.setup_logger(); "
-        "config.logger.warning('hola', extra={'event': 'probe_write'})"
+        "import core_config; core_config.setup_logger(); "
+        "core_config.logger.warning('hola', extra={'event': 'probe_write'})"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -95,8 +95,8 @@ def test_setup_logger_is_idempotent(tmp_path: Path) -> None:
     log_file = tmp_path / "idempotent.log"
     env = {**os.environ, "ALLOWED_CHAT_IDS": "111", "BOT_LOG_FILE": str(log_file)}
     script = (
-        "import config; config.setup_logger(); config.setup_logger(); "
-        "print(len(config.logger.handlers))"
+        "import core_config; core_config.setup_logger(); core_config.setup_logger(); "
+        "print(len(core_config.logger.handlers))"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],

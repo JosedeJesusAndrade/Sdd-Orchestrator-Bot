@@ -34,7 +34,7 @@ packages = [
     "tmp",
     "utils",
 ]
-py-modules = ["bot", "config", "get_chat_id"]
+py-modules = ["bot", "core_config", "telegram_config", "get_chat_id"]
 
 [tool.ruff]
 target-version = "py311"

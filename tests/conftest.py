@@ -18,7 +18,7 @@ _TEST_LOG_DIR = Path(tempfile.gettempdir()) / "sdd-bot-tests"
 _TEST_LOG_DIR.mkdir(exist_ok=True)
 os.environ["BOT_LOG_FILE"] = str(_TEST_LOG_DIR / "bot-test.log")
 
-from config import DEFAULT_SESSION_NAME, setup_logger  # noqa: E402
+from core_config import DEFAULT_SESSION_NAME, setup_logger  # noqa: E402
 
 setup_logger()
 

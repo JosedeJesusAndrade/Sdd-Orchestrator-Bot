@@ -10,7 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from config import ALLOWED_CHAT_IDS, CONTAINER_KEY
+from telegram_config import ALLOWED_CHAT_IDS, CONTAINER_KEY
 
 CHAT_ID = ALLOWED_CHAT_IDS[0]
 

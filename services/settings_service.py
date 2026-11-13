@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR, resolve_model
+from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR, resolve_model
 from services.session_store import SessionStore
 
 if TYPE_CHECKING:

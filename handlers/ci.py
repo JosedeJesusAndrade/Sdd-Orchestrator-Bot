@@ -15,10 +15,10 @@ from typing import cast
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import CONTAINER_KEY
 from handlers import authorized
 from handlers._guards import require_chat
 from services.container import AppContainer
+from telegram_config import CONTAINER_KEY
 
 
 def _get_container(context: ContextTypes.DEFAULT_TYPE) -> AppContainer:
@@ -229,7 +229,7 @@ async def wdir_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     args = context.args
 
     # Default parent dir — where all projects live
-    from config import OPENCODE_WORKDIR
+    from core_config import OPENCODE_WORKDIR
 
     parent = Path(OPENCODE_WORKDIR)
     if not parent.exists():

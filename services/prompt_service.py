@@ -40,7 +40,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from config import (
+from core_config import (
     OPENCODE_TIMEOUT,
     OPENCODE_WORKDIR,
     PROGRESS_UPDATE_INTERVAL,

@@ -13,13 +13,14 @@ from typing import cast
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import CONTAINER_KEY, DEFAULT_SESSION_NAME
+from core_config import DEFAULT_SESSION_NAME
 from handlers import authorized
 from handlers._guards import require_chat, require_message
 from locales import get_strings
 from services.container import AppContainer
 from services.session_service import InvalidSessionNameError, SessionNotDiscoveredError
 from services.session_store import SessionExistsError, SessionNotFoundError
+from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, mask_chat_id
 from utils.time_formatting import relative_time
 

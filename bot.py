@@ -9,7 +9,6 @@ and enhanced session status (/status).
 import asyncio
 import contextlib
 import logging
-import os
 import signal
 import sys
 import time
@@ -27,18 +26,22 @@ from telegram.ext import (
     filters,
 )
 
-from config import (
-    ALLOWED_CHAT_IDS,
-    BOT_TOKEN,
-    CONNECTIVITY_CHECK_INTERVAL,
-    CONNECTIVITY_FIRST_CHECK_DELAY,
-    CONTAINER_KEY,
+from core_config import (
     DEFAULT_MODEL,
+    EXPLORE_DB,
     OPENAI_API_KEY,
     OPENCODE_BACKEND,
     OPENCODE_TIMEOUT,
     OPENCODE_WORKDIR,
     setup_logger,
+)
+from telegram_config import (
+    ALLOWED_CHAT_IDS,
+    CONNECTIVITY_CHECK_INTERVAL,
+    CONNECTIVITY_FIRST_CHECK_DELAY,
+    CONTAINER_KEY,
+    TELEGRAM_BOT_TOKEN,
+    load_telegram_config,
 )
 
 # FIRST action of the entry point: attach console + file handlers. Importing
@@ -278,7 +281,7 @@ def build_application() -> Application[Any, Any, Any, Any, Any, Any]:
     logger.info("Timeout: %ds", OPENCODE_TIMEOUT)
     logger.info("Allowed chats: %d", len(ALLOWED_CHAT_IDS))
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # ── Register our clean error handler ──
     application.add_error_handler(error_handler)
@@ -320,6 +323,10 @@ async def run_bot() -> None:
     AppContainer injected via app.bot_data[CONTAINER_KEY] (DI).
     Handlers access services via _get_container(context).
     """
+    # Explicit fail-fast (moved out of the old import-time config): validate
+    # TELEGRAM ALLOWED_CHAT_IDS before building/polling the app.
+    load_telegram_config()
+
     app = build_application()
 
     await app.initialize()
@@ -428,7 +435,7 @@ async def run_bot() -> None:
     for s in sessions[:5]:
         logger.info("  %s | %s | %s", s["id"], s["title"][:50], s["updated"])
 
-    if os.getenv("EXPLORE_DB", "").lower() in ("1", "true", "yes"):
+    if EXPLORE_DB:
         logger.info("Exploring OpenCode DB schema...")
         try:
             tables = await query_opencode_db(

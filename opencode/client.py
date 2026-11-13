@@ -6,7 +6,7 @@ import re
 import subprocess
 from typing import Any
 
-from config import INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
+from core_config import INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
 from utils.logging import get_module_logger
 
 logger = get_module_logger(__name__)

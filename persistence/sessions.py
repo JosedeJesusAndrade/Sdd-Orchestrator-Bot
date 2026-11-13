@@ -11,8 +11,8 @@ import time
 from datetime import UTC
 from typing import Any
 
-from config import DEFAULT_SESSION_NAME, INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
-from config import SESSION_DB as SESSION_DB
+from core_config import DEFAULT_SESSION_NAME, INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
+from core_config import SESSION_DB as SESSION_DB
 from utils.logging import get_module_logger, log_exception
 
 logger = get_module_logger(__name__)

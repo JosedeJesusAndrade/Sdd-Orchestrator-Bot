@@ -103,7 +103,7 @@ def test_configured_handlers_pass_debug_end_to_end() -> None:
     asserts the handlers pass DEBUG and that a DEBUG swallowed record is
     delivered end-to-end through the real logger chain.
     """
-    import config
+    import core_config as config
 
     handlers = config.logger.handlers
     assert handlers, "config.logger has no handlers attached"

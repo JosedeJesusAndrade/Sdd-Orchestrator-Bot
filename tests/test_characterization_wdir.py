@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-import config
+import core_config
 from handlers.ci import wdir_command
 from tests.handler_fakes import (
     CHAT_ID,
@@ -55,7 +55,7 @@ async def _run(
 def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     projects = tmp_path / "projects"
     projects.mkdir()
-    monkeypatch.setattr(config, "OPENCODE_WORKDIR", str(projects))
+    monkeypatch.setattr(core_config, "OPENCODE_WORKDIR", str(projects))
     return projects
 
 
@@ -120,7 +120,7 @@ async def test_missing_root_reports_and_does_not_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     missing = tmp_path / "does-not-exist"
-    monkeypatch.setattr(config, "OPENCODE_WORKDIR", str(missing))
+    monkeypatch.setattr(core_config, "OPENCODE_WORKDIR", str(missing))
     store = FakeChatSettingsStore()
 
     sender = await _run(store, None)

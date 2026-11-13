@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from config import DEFAULT_MODEL, DEFAULT_SESSION_NAME
+from core_config import DEFAULT_MODEL, DEFAULT_SESSION_NAME
 from utils.logging import get_module_logger, mask_chat_id
 
 if TYPE_CHECKING:

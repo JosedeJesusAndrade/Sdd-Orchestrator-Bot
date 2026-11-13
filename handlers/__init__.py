@@ -17,8 +17,8 @@ from typing import Any, Concatenate, ParamSpec, cast
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import ALLOWED_CHAT_IDS
 from handlers._guards import require_chat
+from telegram_config import ALLOWED_CHAT_IDS
 from utils.logging import get_module_logger, mask_chat_id, new_request_id
 
 logger = get_module_logger(__name__)

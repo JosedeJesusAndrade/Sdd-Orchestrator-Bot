@@ -282,7 +282,7 @@ async def test_per_chat_timeout_is_passed_to_backend() -> None:
 
 async def test_timeout_falls_back_to_global_when_unset() -> None:
     """With no per-chat setting, the global OPENCODE_TIMEOUT must be used."""
-    from config import OPENCODE_TIMEOUT
+    from core_config import OPENCODE_TIMEOUT
 
     view = FakeChatView()
     backend = FakeBackend(AIBackendResult(stdout="ok", returncode=0))
@@ -563,8 +563,8 @@ class _PartialDeliveryBot:
 
 
 def _two_fragment_text() -> str:
-    from config import TELEGRAM_MAX_MESSAGE_LENGTH
     from formatting.markdown import split_message
+    from telegram_config import TELEGRAM_MAX_MESSAGE_LENGTH
 
     text = "x" * (TELEGRAM_MAX_MESSAGE_LENGTH + 50)
     assert len(split_message(text)) == 2

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from config import BASE_DIR
+from core_config import BASE_DIR
 from opencode.client import query_opencode_db
 from services.agent_sessions import (
     ConversationSummary,
