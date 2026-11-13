@@ -20,21 +20,37 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from core_config import INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
+from core_config import DEFAULT_SESSION_NAME, INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
 from opencode.client import query_opencode_db
 from persistence.sessions import (
     fetch_opencode_sessions,
     invalidate_opencode_sessions_cache,
 )
 from services.agent_sessions import SessionCatalog, is_valid_real_id
+from services.session_commands import (
+    SessionAdopted,
+    SessionCommand,
+    SessionCommandKind,
+    SessionCreated,
+    SessionDeleted,
+    SessionDiscovered,
+    SessionInfoResult,
+    SessionListed,
+    SessionOutcome,
+    SessionSwitched,
+    SessionUsage,
+)
 from services.session_store import (
     SessionExistsError,
     SessionInfo,
+    SessionNotFoundError,
     SessionStore,
 )
 from utils.logging import get_module_logger, log_exception, mask_conversation_key
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from services.conversation import ConversationKey
 
 logger = get_module_logger(__name__)
@@ -101,6 +117,25 @@ class SessionListSnapshot:
     unadopted: list[DiscoveredSession]
 
 
+@dataclass(frozen=True)
+class SessionDetails:
+    """The RAW data behind ``/session info``, formatted by the view.
+
+    The core never decides display strings: ``real_id`` truncation, the
+    ``(sin ID aún)`` placeholder, the ``nunca`` fallback and the relative time
+    all live in the frontend. ``enrichment`` is the raw OpenCode DB map
+    (``message_count`` / ``created_at`` / ``model`` when present).
+    """
+
+    name: str
+    real_id: str | None
+    title: str
+    created: str
+    last_used: str | None
+    prompt_count: int
+    enrichment: Mapping[str, object]
+
+
 class SessionNotDiscoveredError(Exception):
     """Raised when adopting a real ID that OpenCode does not know about."""
 
@@ -128,6 +163,82 @@ class SessionService:
     ) -> None:
         self._store = session_store
         self._catalog = catalog
+
+    async def get_info(
+        self, conversation_id: ConversationKey, name: str | None = None
+    ) -> SessionDetails:
+        """Resolve a session (explicit / active / default) and return its RAW data.
+
+        Raises:
+            SessionNotFoundError: when the resolved target does not exist. The
+                exception message carries the resolved name so the view can
+                render the not-found copy.
+        """
+        sessions = await self._store.list_sessions(conversation_id)
+        active_session = await self._store.get_active_session(conversation_id)
+        target_name = (
+            name if name else (active_session.name if active_session else DEFAULT_SESSION_NAME)
+        )
+
+        target = next((s for s in sessions if s.name == target_name), None)
+        if target is None:
+            raise SessionNotFoundError(target_name)
+
+        enrichment = await self.enrich(target.real_id)
+        return SessionDetails(
+            name=target.name,
+            real_id=target.real_id,
+            title=target.title,
+            created=target.created,
+            last_used=target.last_used,
+            prompt_count=target.prompt_count,
+            enrichment=enrichment,
+        )
+
+    async def dispatch(
+        self, conversation_id: ConversationKey, command: SessionCommand
+    ) -> SessionOutcome:
+        """Execute a parsed ``/session`` command and return a typed outcome.
+
+        Missing required arguments yield :class:`SessionUsage` without touching
+        the store. Domain errors (``SessionExistsError``,
+        ``SessionNotFoundError``, ``InvalidSessionNameError``,
+        ``SessionNotDiscoveredError``) propagate so the view maps them to copy.
+        """
+        kind = command.kind
+
+        if kind is SessionCommandKind.NEW:
+            if not command.name:
+                return SessionUsage(kind=kind)
+            return SessionCreated(await self.create(conversation_id, command.name))
+
+        if kind is SessionCommandKind.LIST:
+            return SessionListed(await self.list_with_discovered(conversation_id))
+
+        if kind is SessionCommandKind.SWITCH:
+            if not command.name:
+                return SessionUsage(kind=kind)
+            return SessionSwitched(await self.switch(conversation_id, command.name))
+
+        if kind is SessionCommandKind.DELETE:
+            if not command.name:
+                return SessionUsage(kind=kind)
+            real_id = await self.delete(conversation_id, command.name)
+            return SessionDeleted(name=command.name, real_id=real_id)
+
+        if kind is SessionCommandKind.INFO:
+            return SessionInfoResult(await self.get_info(conversation_id, command.name))
+
+        if kind is SessionCommandKind.DISCOVER:
+            return SessionDiscovered(await self.discover(conversation_id))
+
+        if kind is SessionCommandKind.ADOPT:
+            if not command.real_id or not command.name:
+                return SessionUsage(kind=kind)
+            await self.adopt(conversation_id, command.real_id, command.name)
+            return SessionAdopted(name=command.name, real_id=command.real_id)
+
+        return SessionUsage(kind=kind, raw=command.raw)
 
     async def create(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Create a named session and invalidate the discovery cache."""

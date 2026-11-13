@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from frontends.telegram.keys import telegram_key
 from handlers.sessions import session_command
-from services.session_store import SessionInfo
+from services.session_service import SessionService
+from services.session_store import SessionInfo, SessionStore
 from tests.handler_fakes import (
     CHAT_ID,
     FakeMessage,
@@ -57,10 +58,15 @@ class _FakeStore:
         return self._active
 
 
-class _FakeSessionService:
+class _FakeSessionService(SessionService):
+    """Drives the real ``get_info`` composition; only ``enrich`` is stubbed."""
+
     def __init__(self, enrichment: dict[str, Any] | None = None) -> None:
         self.enrichment = dict(enrichment or {})
         self.enriched: list[str | None] = []
+
+    def bind(self, store: _FakeStore) -> None:
+        self._store = cast(SessionStore, store)
 
     async def enrich(self, real_id: str | None) -> dict[str, Any]:
         self.enriched.append(real_id)
@@ -73,6 +79,7 @@ async def _run_info(
     service: _FakeSessionService,
     args: list[str],
 ) -> None:
+    service.bind(store)
     container = SimpleNamespace(session_store=store, session_service=service)
     await session_command(make_update(msg), make_context(container, args=args))
 

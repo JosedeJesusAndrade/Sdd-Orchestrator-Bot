@@ -8,15 +8,15 @@ typed ``parse_session_command`` + ``dispatch`` pair.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from frontends.telegram.keys import telegram_key
 from handlers.sessions import session_command
 from locales import get_strings
-from services.session_service import SessionListSnapshot
-from services.session_store import SessionInfo
+from services.session_service import SessionListSnapshot, SessionService
+from services.session_store import SessionInfo, SessionStore
 from tests.handler_fakes import CHAT_ID, FakeMessage, make_context, make_update
 
 KEY = telegram_key(CHAT_ID)
@@ -45,9 +45,14 @@ class _FakeStore:
         return None
 
 
-class _FakeSessionService:
+class _FakeSessionService(SessionService):
+    """Drives the real ``dispatch`` router; the operations are stubbed."""
+
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
+
+    def bind(self, store: _FakeStore) -> None:
+        self._store = cast(SessionStore, store)
 
     async def create(self, conversation_id: Any, name: str) -> SessionInfo:
         self.calls.append(("create", conversation_id, name))
@@ -83,6 +88,7 @@ async def _run(
     store: _FakeStore,
     args: list[str] | None,
 ) -> None:
+    service.bind(store)
     container = SimpleNamespace(session_service=service, session_store=store)
     await session_command(make_update(msg), make_context(container, args=args))
 
