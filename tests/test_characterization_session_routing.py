@@ -73,7 +73,7 @@ class _FakeSessionService(SessionService):
 
     async def list_with_discovered(self, conversation_id: Any) -> SessionListSnapshot:
         self.calls.append(("list", conversation_id))
-        return SessionListSnapshot(sessions=[], unadopted=[])
+        return SessionListSnapshot(sessions=(), unadopted=())
 
     async def switch(self, conversation_id: Any, name: str) -> SessionInfo:
         self.calls.append(("switch", conversation_id, name))

@@ -111,10 +111,14 @@ class DiscoveredSession:
 
 @dataclass(frozen=True)
 class SessionListSnapshot:
-    """Bot-managed sessions plus OpenCode sessions not yet adopted."""
+    """Bot-managed sessions plus OpenCode sessions not yet adopted.
 
-    sessions: list[SessionInfo]
-    unadopted: list[DiscoveredSession]
+    Both collections are tuples so the frozen dataclass is genuinely
+    immutable: a caller cannot append to the "snapshot".
+    """
+
+    sessions: tuple[SessionInfo, ...]
+    unadopted: tuple[DiscoveredSession, ...]
 
 
 @dataclass(frozen=True)
@@ -271,8 +275,20 @@ class SessionService:
         ``PromptService`` calls this before the first prompt so the OpenCode
         session id created by that prompt has a bot session to persist into.
         Idempotent: an already-active session is returned untouched.
+
+        The "ensure" POLICY lives here (the service layer); the store only
+        exposes the primitives it is composed from. Resolution order:
+        current active -> activate an existing ``default`` -> create ``default``.
         """
-        return await self._store.ensure_active(conversation_id)
+        active = await self._store.get_active_session(conversation_id)
+        if active is not None:
+            return active
+
+        sessions = await self._store.list_sessions(conversation_id)
+        if any(session.name == DEFAULT_SESSION_NAME for session in sessions):
+            return await self._store.switch_session(conversation_id, DEFAULT_SESSION_NAME)
+
+        return await self._store.create_session(conversation_id, DEFAULT_SESSION_NAME)
 
     async def new_chat(self, conversation_id: ConversationKey) -> SessionInfo:
         """Create and activate the next free ``chat-N`` session (SS-02).
@@ -333,7 +349,7 @@ class SessionService:
             for oc in oc_sessions
             if oc["id"] not in bot_ids
         ]
-        return SessionListSnapshot(sessions=bot_sessions, unadopted=unadopted)
+        return SessionListSnapshot(sessions=tuple(bot_sessions), unadopted=tuple(unadopted))
 
     async def discover(self, conversation_id: ConversationKey) -> list[DiscoveredSession]:
         """Return every OpenCode session annotated with its adoption status."""

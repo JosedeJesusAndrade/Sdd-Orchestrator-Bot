@@ -81,11 +81,13 @@ def migrate_legacy_keys(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
 # ── Domain objects ─────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(frozen=True)
 class SessionInfo:
     """Immutable snapshot of a named session's state.
 
-    Returned by all read operations — callers never touch raw dicts.
+    Returned by all read operations — callers never touch raw dicts. Updates
+    are expressed as new instances (``dataclasses.replace``) or store writes;
+    the frozen dataclass makes an accidental field mutation a type error.
     """
 
     name: str
@@ -285,40 +287,6 @@ class SessionStore:
             is_active=True,
             workdir=session.get("workdir"),
         )
-
-    async def ensure_active(self, conversation_id: ConversationKey) -> SessionInfo:
-        """Return the active session, activating ``default`` or creating it.
-
-        This is the store-level half of SS-01: on a fresh key the first prompt
-        must have a bot session to persist the OpenCode ``real_id`` into. The
-        operation is idempotent — an already-active session is returned without
-        writing anything.
-        """
-        active = await self.get_active_session(conversation_id)
-        if active is not None:
-            return active
-
-        data = await self._load()
-        cid = str(conversation_id)
-        chat_data = data.setdefault(cid, {})
-        sessions = chat_data.setdefault("sessions", {})
-
-        if DEFAULT_SESSION_NAME in sessions:
-            chat_data["active"] = DEFAULT_SESSION_NAME
-            await self._save(data)
-            s = sessions[DEFAULT_SESSION_NAME]
-            return SessionInfo(
-                name=DEFAULT_SESSION_NAME,
-                real_id=s.get("id"),
-                title=s.get("title", DEFAULT_SESSION_NAME),
-                created=s.get("created", ""),
-                last_used=s.get("last_used"),
-                prompt_count=s.get("prompt_count", 0),
-                is_active=True,
-                workdir=s.get("workdir"),
-            )
-
-        return await self.create_session(conversation_id, DEFAULT_SESSION_NAME)
 
     async def create_session(
         self,

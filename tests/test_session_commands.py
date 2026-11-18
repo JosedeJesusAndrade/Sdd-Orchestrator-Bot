@@ -71,7 +71,9 @@ def test_parse_unknown_subcommand_carries_the_raw_value() -> None:
 # ── Dispatch outcomes ──────────────────────────────────────────────────
 
 
-def _info(name: str = "default", real_id: str | None = "ses_x") -> SessionInfo:
+def _info(
+    name: str = "default", real_id: str | None = "ses_x", *, is_active: bool = False
+) -> SessionInfo:
     return SessionInfo(
         name=name,
         real_id=real_id,
@@ -79,6 +81,7 @@ def _info(name: str = "default", real_id: str | None = "ses_x") -> SessionInfo:
         created="2026-05-19T00:00:00",
         last_used=None,
         prompt_count=0,
+        is_active=is_active,
     )
 
 
@@ -298,8 +301,7 @@ async def test_get_info_uses_the_explicit_name() -> None:
 
 
 async def test_get_info_falls_back_to_the_active_session() -> None:
-    active = _info("active-one", "ses_a")
-    active.is_active = True
+    active = _info("active-one", "ses_a", is_active=True)
     store = FakeStore([_info("other"), active])
 
     details = await _InfoService(store).get_info(conv(42))

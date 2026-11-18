@@ -7,7 +7,9 @@ the B14 cache-invalidation contract for every mutating operation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -86,10 +88,12 @@ class FakeStore:
         self.deleted: list[tuple[Any, str]] = []
         self.switched: list[tuple[Any, str]] = []
         self.delete_real_id: str | None = None
-        self.ensured: list[Any] = []
 
     async def list_sessions(self, conversation_id: Any) -> list[SessionInfo]:
         return list(self.sessions)
+
+    async def get_active_session(self, conversation_id: Any) -> SessionInfo | None:
+        return next((s for s in self.sessions if s.is_active), None)
 
     async def create_session(
         self,
@@ -99,22 +103,17 @@ class FakeStore:
         workdir: str | None = None,
         last_used: str | None = None,
     ) -> SessionInfo:
-        info = _session(name, workdir=workdir, last_used=last_used)
+        info = _session(name, workdir=workdir, last_used=last_used, is_active=True)
+        self.sessions = [replace(s, is_active=False) for s in self.sessions]
         self.sessions.append(info)
         self.created.append((conversation_id, name))
         self.created_workdirs.append(workdir)
         self.created_last_used.append(last_used)
         return info
 
-    async def ensure_active(self, conversation_id: Any) -> SessionInfo:
-        self.ensured.append(conversation_id)
-        active = next((s for s in self.sessions if s.is_active), None)
-        if active is not None:
-            return active
-        return await self.create_session(conversation_id, "default")
-
     async def switch_session(self, conversation_id: Any, name: str) -> SessionInfo:
         self.switched.append((conversation_id, name))
+        self.sessions = [replace(s, is_active=(s.name == name)) for s in self.sessions]
         return next(s for s in self.sessions if s.name == name)
 
     async def update_session_id(self, conversation_id: Any, real_id: str) -> None:
@@ -190,10 +189,10 @@ async def test_list_with_discovered_merges_stored_and_discovered(
 
     assert isinstance(snapshot, SessionListSnapshot)
     assert [s.name for s in snapshot.sessions] == ["mine", "fresh"]
-    assert snapshot.unadopted == [
+    assert snapshot.unadopted == (
         DiscoveredSession(id="ses_2", title="Two", updated="11:00"),
         DiscoveredSession(id="ses_9", title="ses_9"),
-    ]
+    )
 
 
 async def test_list_with_discovered_without_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +202,7 @@ async def test_list_with_discovered_without_discovery(monkeypatch: pytest.Monkey
     snapshot = await _service(store).list_with_discovered(conv(42))
 
     assert [s.name for s in snapshot.sessions] == ["mine"]
-    assert snapshot.unadopted == []
+    assert snapshot.unadopted == ()
 
 
 async def test_list_with_discovered_swallows_discovery_failure(
@@ -219,7 +218,7 @@ async def test_list_with_discovered_swallows_discovery_failure(
     snapshot = await _service(store).list_with_discovered(conv(42))
 
     assert [s.name for s in snapshot.sessions] == ["mine"]
-    assert snapshot.unadopted == []
+    assert snapshot.unadopted == ()
 
 
 # ── discover ───────────────────────────────────────────────────────────
@@ -371,15 +370,115 @@ async def test_adopt_without_catalog_keeps_the_cli_validation(
 # ── ensure_active / new_chat ───────────────────────────────────────────
 
 
-async def test_ensure_active_delegates_to_the_store(invalidations: list[bool]) -> None:
+async def test_ensure_active_returns_the_active_session(invalidations: list[bool]) -> None:
     store = FakeStore([_session("default", is_active=True)])
     service = _service(store)
 
     session = await service.ensure_active(conv(42))
 
     assert session.name == "default"
-    assert store.ensured == [conv(42)]
+    assert store.created == []
+    assert store.switched == []
     assert invalidations == []
+
+
+async def test_ensure_active_activates_an_existing_default(
+    invalidations: list[bool],
+) -> None:
+    store = FakeStore([_session("default"), _session("chat-1")])
+    service = _service(store)
+
+    session = await service.ensure_active(conv(42))
+
+    assert session.name == "default"
+    assert store.created == []
+    assert store.switched == [(conv(42), "default")]
+    assert invalidations == []
+
+
+async def test_ensure_active_creates_the_default_when_missing(
+    invalidations: list[bool],
+) -> None:
+    store = FakeStore([_session("chat-1")])
+    service = _service(store)
+
+    session = await service.ensure_active(conv(42))
+
+    assert session.name == "default"
+    assert session.is_active is True
+    assert store.created == [(conv(42), "default")]
+    assert store.switched == []
+    assert invalidations == []
+
+
+async def test_ensure_active_creates_default_on_a_fresh_key(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.json")
+    service = SessionService(store)
+
+    session = await service.ensure_active(conv(12345))
+
+    assert session.name == "default"
+    assert session.is_active is True
+    assert [s.name for s in await store.list_sessions(conv(12345))] == ["default"]
+
+
+async def test_ensure_active_is_idempotent(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.json")
+    service = SessionService(store)
+
+    await service.ensure_active(conv(12345))
+    await service.ensure_active(conv(12345))
+
+    assert [s.name for s in await store.list_sessions(conv(12345))] == ["default"]
+
+
+async def test_ensure_active_activates_an_existing_default_in_the_real_store(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sessions.json"
+    payload = {
+        "telegram:1": {
+            "sessions": {
+                "default": {
+                    "id": None,
+                    "title": "default",
+                    "created": "2026-05-19T00:00:00+00:00",
+                    "last_used": None,
+                    "prompt_count": 0,
+                },
+                "chat-1": {
+                    "id": "ses_1",
+                    "title": "chat-1",
+                    "created": "2026-05-19T00:00:00+00:00",
+                    "last_used": None,
+                    "prompt_count": 0,
+                },
+            }
+        }
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    store = SessionStore(path)
+    service = SessionService(store)
+
+    session = await service.ensure_active(conv("telegram:1"))
+
+    assert session.name == "default"
+    assert session.is_active is True
+    active = await store.get_active_session(conv("telegram:1"))
+    assert active is not None and active.name == "default"
+
+
+async def test_ensure_active_returns_the_active_session_from_the_real_store(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(tmp_path / "sessions.json")
+    await store.create_session(conv(12345), "chat-1")
+    service = SessionService(store)
+
+    session = await service.ensure_active(conv(12345))
+
+    assert session.name == "chat-1"
+    assert [s.name for s in await store.list_sessions(conv(12345))] == ["chat-1"]
 
 
 async def test_new_chat_creates_chat_1_when_empty(invalidations: list[bool]) -> None:

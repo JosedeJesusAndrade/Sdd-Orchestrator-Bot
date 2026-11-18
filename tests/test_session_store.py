@@ -71,7 +71,7 @@ def test_chat_settings(tmp_store):
     assert timeout == 300
 
 
-# ── P4: workdir, ensure_active, legacy records ─────────────────────────
+# ── P4: workdir, legacy records ────────────────────────────────────────
 
 
 def test_create_session_stamps_workdir_and_last_used(tmp_store):
@@ -125,58 +125,16 @@ def test_legacy_record_without_workdir_reads_none_without_migration(tmp_path: Pa
     assert not (tmp_path / "sessions.json.bak").exists()
 
 
-def test_ensure_active_creates_the_default_on_a_fresh_key(tmp_store):
-    session = asyncio.run(tmp_store.ensure_active(conv(12345)))
-
-    assert session.name == "default"
-    assert session.is_active is True
-    assert [s.name for s in asyncio.run(tmp_store.list_sessions(conv(12345)))] == ["default"]
+def test_get_active_session_returns_none_for_a_fresh_key(tmp_store):
+    assert asyncio.run(tmp_store.get_active_session(conv(12345))) is None
 
 
-def test_ensure_active_is_idempotent(tmp_store):
-    asyncio.run(tmp_store.ensure_active(conv(12345)))
-    asyncio.run(tmp_store.ensure_active(conv(12345)))
-
-    assert [s.name for s in asyncio.run(tmp_store.list_sessions(conv(12345)))] == ["default"]
-
-
-def test_ensure_active_activates_an_existing_default(tmp_path: Path):
-    path = tmp_path / "sessions.json"
-    payload = {
-        "telegram:1": {
-            "sessions": {
-                "default": {
-                    "id": None,
-                    "title": "default",
-                    "created": "2026-05-19T00:00:00+00:00",
-                    "last_used": None,
-                    "prompt_count": 0,
-                },
-                "chat-1": {
-                    "id": "ses_1",
-                    "title": "chat-1",
-                    "created": "2026-05-19T00:00:00+00:00",
-                    "last_used": None,
-                    "prompt_count": 0,
-                },
-            }
-        }
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    store = SessionStore(path)
-
-    session = asyncio.run(store.ensure_active(conv("telegram:1")))
-
-    assert session.name == "default"
-    assert session.is_active is True
-    active = asyncio.run(store.get_active_session(conv("telegram:1")))
-    assert active is not None and active.name == "default"
-
-
-def test_ensure_active_returns_the_active_session_unchanged(tmp_store):
+def test_switch_session_updates_the_active_session(tmp_store):
     asyncio.run(tmp_store.create_session(conv(12345), "chat-1"))
+    asyncio.run(tmp_store.create_session(conv(12345), "chat-2"))
 
-    session = asyncio.run(tmp_store.ensure_active(conv(12345)))
+    session = asyncio.run(tmp_store.switch_session(conv(12345), "chat-1"))
 
     assert session.name == "chat-1"
-    assert [s.name for s in asyncio.run(tmp_store.list_sessions(conv(12345)))] == ["chat-1"]
+    active = asyncio.run(tmp_store.get_active_session(conv(12345)))
+    assert active is not None and active.name == "chat-1"
