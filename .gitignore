@@ -17,6 +17,8 @@ bot.log*
 
 # Sessions
 sessions.json
+# Runtime migration backup of sessions.json (never tracked)
+sessions.json.bak
 
 # IDE
 .vscode/
