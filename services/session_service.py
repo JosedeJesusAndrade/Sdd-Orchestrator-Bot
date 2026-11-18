@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from services.conversation import ConversationKey
+    from services.effective_workdir import EffectiveWorkdir
 
 logger = get_module_logger(__name__)
 
@@ -160,9 +161,13 @@ class SessionService:
         session_store: SessionStore,
         *,
         catalog: SessionCatalog | None = None,
+        effective_workdir: EffectiveWorkdir | None = None,
     ) -> None:
         self._store = session_store
         self._catalog = catalog
+        # Injected by ``build_prompt_stack`` so per-session workdir stamps use
+        # the SAME resolved path as prompts/history (WD-02).
+        self._effective_workdir = effective_workdir
 
     async def get_info(
         self, conversation_id: ConversationKey, name: str | None = None

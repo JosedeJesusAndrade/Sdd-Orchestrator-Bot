@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -12,6 +13,7 @@ from services.agent_sessions import (
     Message,
 )
 from services.conversations_service import ConversationsService
+from services.effective_workdir import WorkdirResolution, WorkdirSource
 from services.session_service import SessionNotDiscoveredError, SessionService
 from services.session_store import SessionInfo, SessionStore
 from tests.conversation_keys import conv
@@ -103,14 +105,36 @@ class FakeCatalog:
         return self.by_id.get(real_id)
 
 
+class FakeResolver:
+    """Minimal ``EffectiveWorkdir`` double returning a fixed directory."""
+
+    def __init__(self, directory: str) -> None:
+        self._directory = Path(directory)
+        self.calls: list[Any] = []
+
+    async def resolve(self, conversation_id: Any) -> WorkdirResolution:
+        self.calls.append(conversation_id)
+        return WorkdirResolution(
+            path=self._directory,
+            source=WorkdirSource.SETTING,
+            mismatch=False,
+        )
+
+
 def _service(
     agent: FakeAgentSessions,
     store: FakeStore,
     *,
     catalog: FakeCatalog | None = None,
+    resolver: FakeResolver | None = None,
 ) -> ConversationsService:
     session_service = SessionService(cast(SessionStore, store), catalog=catalog)
-    return ConversationsService(agent, session_service, cast(SessionStore, store))
+    return ConversationsService(
+        agent,
+        session_service,
+        cast(SessionStore, store),
+        effective_workdir=cast(Any, resolver),
+    )
 
 
 # ── list_conversations ─────────────────────────────────────────────────
@@ -150,6 +174,16 @@ async def test_list_does_not_use_the_directory_argument() -> None:
     await _service(agent, FakeStore()).list_conversations(conv(42))
 
     assert agent.list_calls == [{"directory": None, "limit": 50}]
+
+
+async def test_list_scopes_history_to_the_resolved_workdir() -> None:
+    agent = FakeAgentSessions([])
+    resolver = FakeResolver("C:/wA")
+
+    await _service(agent, FakeStore(), resolver=resolver).list_conversations(conv(42))
+
+    assert agent.list_calls == [{"directory": str(Path("C:/wA")), "limit": 50}]
+    assert resolver.calls == [conv(42)]
 
 
 # ── open ───────────────────────────────────────────────────────────────

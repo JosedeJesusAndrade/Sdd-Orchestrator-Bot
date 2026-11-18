@@ -1,7 +1,7 @@
 """Unit tests for HealthService (Fase B).
 
 Covers the observable snapshot contract: connectivity probe both ways
-(and the Flet "no probe" case), version parsing via ``BASE_DIR``, OC
+(and the Flet "no probe" case), version parsing via ``PROJECT_ROOT``, OC
 session count with its error fallback, uptime and python fields.
 """
 
@@ -74,7 +74,7 @@ def _write_version(tmp_path: Path, content: str) -> None:
 async def test_snapshot_without_probe_reports_unknown_connectivity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
+    monkeypatch.setattr("services.health_service.PROJECT_ROOT", tmp_path)
     _write_version(tmp_path, _VERSION_FILE)
 
     snapshot = await _service().snapshot(conv(42))
@@ -124,7 +124,7 @@ async def test_probe_failure_reports_disconnected_and_unknown_user() -> None:
 async def test_version_is_read_from_pyproject(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
+    monkeypatch.setattr("services.health_service.PROJECT_ROOT", tmp_path)
     _write_version(tmp_path, _VERSION_FILE)
 
     snapshot = await _service().snapshot(conv(1))
@@ -135,7 +135,7 @@ async def test_version_is_read_from_pyproject(
 async def test_version_falls_back_when_pyproject_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
+    monkeypatch.setattr("services.health_service.PROJECT_ROOT", tmp_path)
 
     snapshot = await _service().snapshot(conv(1))
 
@@ -145,7 +145,7 @@ async def test_version_falls_back_when_pyproject_is_missing(
 async def test_version_falls_back_when_pyproject_has_no_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.health_service.BASE_DIR", tmp_path)
+    monkeypatch.setattr("services.health_service.PROJECT_ROOT", tmp_path)
     _write_version(tmp_path, '[project]\nname = "x"\n')
 
     snapshot = await _service().snapshot(conv(1))

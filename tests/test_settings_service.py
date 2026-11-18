@@ -14,7 +14,8 @@ from typing import Any, cast
 
 import pytest
 
-from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR
+from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT
+from services.effective_workdir import ENV_FALLBACK_WORKDIR
 from services.session_store import SessionStore
 from services.settings_service import (
     ChatSettings,
@@ -62,7 +63,7 @@ async def test_get_returns_defaults_when_store_is_empty() -> None:
     assert settings == ChatSettings(
         model=DEFAULT_MODEL,
         timeout=OPENCODE_TIMEOUT,
-        workdir=OPENCODE_WORKDIR,
+        workdir=str(ENV_FALLBACK_WORKDIR),
         provider="opencode",
     )
 
@@ -74,7 +75,7 @@ async def test_get_applies_defaults_only_where_values_are_missing() -> None:
 
     assert settings.model == "custom/model"
     assert settings.timeout == 45
-    assert settings.workdir == OPENCODE_WORKDIR
+    assert settings.workdir == str(ENV_FALLBACK_WORKDIR)
     assert settings.provider == "opencode"
 
 

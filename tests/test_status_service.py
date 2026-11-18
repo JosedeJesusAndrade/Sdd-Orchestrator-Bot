@@ -8,11 +8,13 @@ and the git-branch lookup (success and both failure paths).
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from services.effective_workdir import WorkdirResolution, WorkdirSource
 from services.session_store import SessionInfo, SessionStore
 from services.status_service import StatusService, StatusSnapshot
 from tests.conversation_keys import conv
@@ -43,6 +45,22 @@ class FakeStore:
         return dict(self._settings)
 
 
+class FakeResolver:
+    """Minimal ``EffectiveWorkdir`` double returning a fixed path."""
+
+    def __init__(self, path: str) -> None:
+        self._path = Path(path)
+        self.calls: list[object] = []
+
+    async def resolve(self, conversation_id: object) -> WorkdirResolution:
+        self.calls.append(conversation_id)
+        return WorkdirResolution(
+            path=self._path,
+            source=WorkdirSource.SETTING,
+            mismatch=False,
+        )
+
+
 def _session(
     *,
     name: str = "work",
@@ -67,10 +85,12 @@ async def _snapshot(
     *,
     settings: dict[str, Any] | None = None,
     start_time: float | None = None,
+    resolver: FakeResolver | None = None,
 ) -> StatusSnapshot:
     service = StatusService(
         cast(SessionStore, FakeStore(session, model="test/model", settings=settings or {})),
         start_time=start_time,
+        effective_workdir=cast(Any, resolver),
     )
     return await service.snapshot(conv(42))
 
@@ -94,10 +114,12 @@ async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> 
             FakeStore(
                 _session(),
                 model="deepseek/deepseek-v4-pro",
-                settings={"workdir": "C:/repo"},
+                # The legacy setting differs: the resolver must win (WD-02).
+                settings={"workdir": "C:/legacy"},
             ),
         ),
         start_time=940.0,
+        effective_workdir=cast(Any, FakeResolver("C:/repo")),
     )
 
     snapshot = await service.snapshot(conv(42))
@@ -116,7 +138,7 @@ async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> 
     assert invocations == [
         (
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            {"capture_output": True, "text": True, "cwd": "C:/repo", "timeout": 5},
+            {"capture_output": True, "text": True, "cwd": str(Path("C:/repo")), "timeout": 5},
         )
     ]
 
@@ -138,6 +160,27 @@ async def test_snapshot_without_active_session_uses_defaults(
     assert snapshot.last_used_fallback is None
     assert snapshot.prompt_count == 0
     assert snapshot.uptime_seconds is None
+
+
+async def test_git_cwd_comes_from_the_resolver_not_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocations: list[dict[str, Any]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        invocations.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="dev\n")
+
+    monkeypatch.setattr("services.status_service.subprocess.run", fake_run)
+
+    snapshot = await _snapshot(
+        _session(),
+        settings={"workdir": "C:/legacy"},
+        resolver=FakeResolver("C:/resolved"),
+    )
+
+    assert snapshot.branch == "dev"
+    assert [kwargs["cwd"] for kwargs in invocations] == [str(Path("C:/resolved"))]
 
 
 # ── Timestamp fallbacks (byte-for-byte old-handler behavior) ───────────

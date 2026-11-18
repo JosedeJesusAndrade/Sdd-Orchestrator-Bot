@@ -24,6 +24,7 @@ from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
     from services.conversation import ConversationKey
+    from services.effective_workdir import EffectiveWorkdir
 
 logger = get_module_logger(__name__)
 
@@ -52,16 +53,30 @@ class StatusSnapshot:
 class StatusService:
     """Compute the data behind /status without any frontend dependency."""
 
-    def __init__(self, session_store: SessionStore, start_time: float | None = None) -> None:
+    def __init__(
+        self,
+        session_store: SessionStore,
+        start_time: float | None = None,
+        *,
+        effective_workdir: EffectiveWorkdir | None = None,
+    ) -> None:
         self._store = session_store
         self._start_time = start_time
+        # Injected by ``build_prompt_stack``; production always passes it so the
+        # git branch is computed in the SAME workdir prompts run in (WD-02).
+        self._effective_workdir = effective_workdir
 
     async def snapshot(self, conversation_id: ConversationKey) -> StatusSnapshot:
         """Return a raw status snapshot for a conversation."""
         session = await self._store.get_active_session(conversation_id)
         model = await self._store.get_model(conversation_id)
-        settings = await self._store.get_all_chat_settings(conversation_id)
-        branch = self._git_branch(settings.get("workdir", ""))
+        if self._effective_workdir is not None:
+            resolved = await self._effective_workdir.resolve(conversation_id)
+            workdir = str(resolved.path)
+        else:
+            settings = await self._store.get_all_chat_settings(conversation_id)
+            workdir = settings.get("workdir", "")
+        branch = self._git_branch(workdir)
         uptime_seconds = self._uptime_seconds()
 
         if session is None:

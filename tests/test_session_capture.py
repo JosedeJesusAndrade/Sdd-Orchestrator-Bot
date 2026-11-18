@@ -15,13 +15,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import replace
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from frontends.telegram.strings import TELEGRAM_STRINGS
 from services.ai_backend import AIBackendResult
 from services.chat_view import ConversationKey
+from services.effective_workdir import WorkdirResolution, WorkdirSource
 from services.opencode_cli_backend import (
     OpenCodeCLIBackend,
     _parse_json_output,
@@ -259,6 +261,7 @@ class _RecordingBackend:
     def __init__(self, results: list[AIBackendResult]) -> None:
         self._results = results
         self.session_ids: list[str | None] = []
+        self.workdirs: list[str | None] = []
 
     async def execute(
         self,
@@ -272,6 +275,7 @@ class _RecordingBackend:
         on_progress: Any = None,
     ) -> AIBackendResult:
         self.session_ids.append(session_id)
+        self.workdirs.append(workdir)
         return self._results.pop(0)
 
     def cancel(self) -> None:
@@ -284,6 +288,20 @@ class _Factory:
 
     def create(self, provider: str | None = None, **kwargs: Any) -> _RecordingBackend:
         return self._backend
+
+
+class _FixedResolver:
+    """Minimal ``EffectiveWorkdir`` double returning one fixed path."""
+
+    def __init__(self, path: str) -> None:
+        self._path = Path(path)
+
+    async def resolve(self, conversation_id: ConversationKey) -> WorkdirResolution:
+        return WorkdirResolution(
+            path=self._path,
+            source=WorkdirSource.SETTING,
+            mismatch=False,
+        )
 
 
 class _View:
@@ -310,6 +328,21 @@ class _Handle:
 
     async def error(self, text: str) -> None:
         return None
+
+
+async def test_prompt_passes_the_resolved_workdir_to_the_backend() -> None:
+    """WD-02: the backend receives the resolver's path, not the raw setting."""
+    store = _RecordingStore(_session(real_id=None))
+    backend = _RecordingBackend([AIBackendResult(stdout="Hola\n", session_id=SID)])
+    service = PromptService(
+        session_store=store,
+        provider_factory=_Factory(backend),
+        effective_workdir=cast(Any, _FixedResolver("C:/resolved")),
+    )
+
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
+
+    assert backend.workdirs == [str(Path("C:/resolved"))]
 
 
 async def test_capture_persists_session_id_when_active_session_has_none() -> None:

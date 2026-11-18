@@ -40,17 +40,15 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from core_config import (
-    OPENCODE_TIMEOUT,
-    OPENCODE_WORKDIR,
-    PROGRESS_UPDATE_INTERVAL,
-)
+from core_config import OPENCODE_TIMEOUT, PROGRESS_UPDATE_INTERVAL
+from services.effective_workdir import ENV_FALLBACK_WORKDIR
 from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
     from services.ai_backend import AIBackend
     from services.ai_provider_factory import ProviderFactoryPort
     from services.chat_view import ChatView, ConversationKey, CoreStrings, ProgressHandle
+    from services.effective_workdir import EffectiveWorkdir
     from services.session_store import SessionInfo, SessionStorePort
 
 logger = get_module_logger(__name__)
@@ -80,9 +78,14 @@ class PromptService:
         self,
         session_store: SessionStorePort,
         provider_factory: ProviderFactoryPort,
+        *,
+        effective_workdir: EffectiveWorkdir | None = None,
     ) -> None:
         self._store = session_store
         self._factory = provider_factory
+        # Injected by ``build_prompt_stack``. Optional only so unit tests can
+        # build a PromptService in isolation; production always passes it.
+        self._effective_workdir = effective_workdir
 
         # Per-conversation running tasks
         self._running: dict[ConversationKey, asyncio.Task[Any]] = {}
@@ -294,14 +297,20 @@ class PromptService:
     ) -> dict[str, Any]:
         """Execute prompt via the resolved AI backend.
 
-        Reads per-chat settings (timeout, workdir, agent) from SessionStore.
+        Reads ``timeout``/``agent`` from SessionStore; the workdir comes from
+        the single :class:`EffectiveWorkdir` resolver (WD-02).
 
         Returns a dict with keys: stdout, stderr, returncode, cancelled.
         """
         timeout_val = await self._store.get_chat_setting(
             conversation_id, "timeout", OPENCODE_TIMEOUT
         )
-        workdir = await self._store.get_chat_setting(conversation_id, "workdir", OPENCODE_WORKDIR)
+        if self._effective_workdir is not None:
+            workdir = str((await self._effective_workdir.resolve(conversation_id)).path)
+        else:
+            workdir = await self._store.get_chat_setting(
+                conversation_id, "workdir", str(ENV_FALLBACK_WORKDIR)
+            )
         agent = await self._store.get_chat_setting(conversation_id, "agent", "sdd-orchestrator")
 
         # Check if cancelled during settings resolution (before subprocess)

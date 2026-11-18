@@ -24,6 +24,7 @@ from opencode.sessions import OpenCodeSessions
 from services.ai_provider_factory import AIProviderFactory
 from services.composition import CoreStack, build_prompt_stack
 from services.conversations_service import ConversationsService
+from services.effective_workdir import EffectiveWorkdir
 from services.opencode_cli_backend import OpenCodeCLIBackend
 from services.opencode_server import OpenCodeServerClient, OpenCodeServerManager
 from services.opencode_server_backend import OpenCodeServerBackend
@@ -83,6 +84,30 @@ def test_conversations_service_shares_the_core_pieces(tmp_path: Path) -> None:
     assert core.conversations_service._agent_sessions is core.agent_sessions
     assert core.conversations_service._session_service is core.session_service
     assert core.conversations_service._session_store is core.session_store
+
+
+def test_effective_workdir_resolver_is_built_on_the_core_seams(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    core = build_prompt_stack(
+        sessions_path=tmp_path / "sessions.json",
+        workdir=str(project),
+    )
+
+    assert isinstance(core.effective_workdir, EffectiveWorkdir)
+    assert core.effective_workdir.fallback == project
+    assert core.effective_workdir._store is core.session_store
+    # OpenCodeSessions satisfies both protocols; the identity is what matters.
+    assert core.effective_workdir._catalog is core.agent_sessions  # type: ignore[comparison-overlap]
+
+
+def test_effective_workdir_is_injected_into_the_four_consumers(tmp_path: Path) -> None:
+    core = build_prompt_stack(sessions_path=tmp_path / "sessions.json")
+
+    resolver = core.effective_workdir
+    assert core.prompt_service._effective_workdir is resolver
+    assert core.conversations_service._effective_workdir is resolver
+    assert core.status_service._effective_workdir is resolver
+    assert core.session_service._effective_workdir is resolver
 
 
 def test_sessions_directory_is_injected(tmp_path: Path) -> None:

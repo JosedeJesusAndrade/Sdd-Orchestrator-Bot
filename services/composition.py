@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core_config import (
-    BASE_DIR,
     OPENAI_API_KEY,
     OPENCODE_BACKEND,
     OPENCODE_CMD,
@@ -28,13 +27,17 @@ from core_config import (
     OPENCODE_SERVER_PASSWORD,
     OPENCODE_SERVER_PORT,
     OPENCODE_TIMEOUT,
-    OPENCODE_WORKDIR,
     SESSIONS_PATH,
 )
 from opencode.sessions import OpenCodeSessions
 from services.agent_sessions import AgentSessions
 from services.ai_provider_factory import AIProviderFactory
 from services.conversations_service import ConversationsService
+from services.effective_workdir import (
+    ENV_FALLBACK_WORKDIR,
+    PROJECT_ROOT,
+    EffectiveWorkdir,
+)
 from services.health_service import HealthService
 from services.opencode_cli_backend import OpenCodeCLIBackend
 from services.opencode_server import (
@@ -64,6 +67,7 @@ class CoreStack:
     """
 
     session_store: SessionStore
+    effective_workdir: EffectiveWorkdir
     provider_factory: AIProviderFactory
     prompt_service: PromptService
     status_service: StatusService
@@ -92,9 +96,9 @@ def build_prompt_stack(
     sessions_path: str | Path = SESSIONS_PATH,
     default_provider: str = "opencode",
     opencode_cmd: str = OPENCODE_CMD,
-    workdir: str = OPENCODE_WORKDIR,
+    workdir: str = str(ENV_FALLBACK_WORKDIR),
     timeout: int = OPENCODE_TIMEOUT,
-    sessions_directory: str | Path = BASE_DIR,
+    sessions_directory: str | Path = PROJECT_ROOT,
     start_time: float | None = None,
     backend: str = OPENCODE_BACKEND,
     server_host: str = OPENCODE_SERVER_HOST,
@@ -135,6 +139,17 @@ def build_prompt_stack(
 
     session_store = SessionStore(Path(sessions_path))
     resolved_start_time = time.time() if start_time is None else start_time
+
+    # Dependency order: store -> agent_sessions (the history/catalog seam) ->
+    # effective_workdir -> session_service -> prompt_service. Every consumer of
+    # the effective workdir shares THIS resolver so prompts, history, status and
+    # session stamps can never disagree.
+    agent_sessions = OpenCodeSessions(sessions_directory)
+    effective_workdir = EffectiveWorkdir(
+        session_store,
+        agent_sessions,
+        fallback=Path(workdir),
+    )
 
     provider_factory = AIProviderFactory(default_provider=default_provider)
     manager: OpenCodeServerManager | None = None
@@ -185,26 +200,35 @@ def build_prompt_stack(
             timeout=timeout,
         )
 
+    session_service = SessionService(
+        session_store,
+        catalog=agent_sessions,
+        effective_workdir=effective_workdir,
+    )
     prompt_service = PromptService(
         session_store=session_store,
         provider_factory=provider_factory,
+        effective_workdir=effective_workdir,
     )
-
-    agent_sessions = OpenCodeSessions(sessions_directory)
-    session_service = SessionService(session_store, catalog=agent_sessions)
     conversations_service = ConversationsService(
         agent_sessions,
         session_service,
         session_store,
+        effective_workdir=effective_workdir,
     )
 
     git_runner, gh_runner = default_runners()
 
     return CoreStack(
         session_store=session_store,
+        effective_workdir=effective_workdir,
         provider_factory=provider_factory,
         prompt_service=prompt_service,
-        status_service=StatusService(session_store, resolved_start_time),
+        status_service=StatusService(
+            session_store,
+            resolved_start_time,
+            effective_workdir=effective_workdir,
+        ),
         health_service=HealthService(session_store, resolved_start_time),
         session_service=session_service,
         settings_service=SettingsService(session_store),

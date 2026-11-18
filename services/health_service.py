@@ -16,8 +16,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from core_config import BASE_DIR
 from persistence.sessions import fetch_opencode_sessions
+from services.effective_workdir import PROJECT_ROOT
 from services.session_store import SessionStore
 from utils.logging import get_module_logger, log_exception
 
@@ -113,9 +113,9 @@ class HealthService:
 
     @staticmethod
     def _read_version() -> str:
-        """Read the project version from ``pyproject.toml`` via ``config.BASE_DIR``."""
+        """Read the project version from ``pyproject.toml`` via ``PROJECT_ROOT``."""
         try:
-            content = (BASE_DIR / "pyproject.toml").read_text(encoding="utf-8")
+            content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
             match = re.search(r'version\s*=\s*"([^"]+)"', content)
             return match.group(1) if match else "?"
         except Exception:

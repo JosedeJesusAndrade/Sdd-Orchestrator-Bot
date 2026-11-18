@@ -24,6 +24,7 @@ from services.session_store import SessionStore
 
 if TYPE_CHECKING:
     from services.conversation import ConversationKey
+    from services.effective_workdir import EffectiveWorkdir
 
 _SLUG_MAX_LENGTH = 30
 
@@ -59,16 +60,24 @@ class ConversationsService:
         agent_sessions: AgentSessions,
         session_service: SessionService,
         session_store: SessionStore,
+        *,
+        effective_workdir: EffectiveWorkdir | None = None,
     ) -> None:
         self._agent_sessions = agent_sessions
         self._session_service = session_service
         self._session_store = session_store
+        # Injected by ``build_prompt_stack``; production always passes it so the
+        # history is scoped to the SAME workdir prompts run in (WD-02).
+        self._effective_workdir = effective_workdir
 
     async def list_conversations(
         self, conversation_id: ConversationKey
     ) -> list[ConversationSummary]:
         """List root conversations, annotated with adoption/active state."""
-        summaries = await self._agent_sessions.list_sessions()
+        directory: str | None = None
+        if self._effective_workdir is not None:
+            directory = str((await self._effective_workdir.resolve(conversation_id)).path)
+        summaries = await self._agent_sessions.list_sessions(directory=directory)
         stored = await self._session_store.list_sessions(conversation_id)
 
         active_name = next((s.name for s in stored if s.is_active), None)

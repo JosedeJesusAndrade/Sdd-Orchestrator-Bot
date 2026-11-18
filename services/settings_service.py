@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, OPENCODE_WORKDIR, resolve_model
+from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, resolve_model
+from services.effective_workdir import ENV_FALLBACK_WORKDIR
 from services.session_store import SessionStore
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ _MAX_TIMEOUT_SECONDS = 86400
 _DEFAULTS: dict[str, Any] = {
     "model": DEFAULT_MODEL,
     "timeout": OPENCODE_TIMEOUT,
-    "workdir": OPENCODE_WORKDIR,
+    "workdir": str(ENV_FALLBACK_WORKDIR),
     "provider": "opencode",
 }
 
@@ -67,7 +68,7 @@ class SettingsService:
         return ChatSettings(
             model=await self._store.get_model(conversation_id),
             timeout=raw.get("timeout", OPENCODE_TIMEOUT),
-            workdir=raw.get("workdir", OPENCODE_WORKDIR),
+            workdir=raw.get("workdir", str(ENV_FALLBACK_WORKDIR)),
             provider=raw.get("provider", "opencode"),
         )
 
