@@ -1,5 +1,7 @@
 """Spanish (es) user-facing strings."""
 
+from services.workdir_failures import WorkdirFailureKind
+
 START_WELCOME = "\U0001f44b OpenCode Bot listo.\n\nEnvi\u00e1 cualquier mensaje y se ejecutar\u00e1 con OpenCode CLI.\nSoporta m\u00faltiples sesiones con /session new|list|switch|delete|info\n/help \u2014 ver todos los comandos\n/status \u2014 estado de la sesi\u00f3n\n/new \u2014 reiniciar sesi\u00f3n activa"
 HELP_TEXT = "*Comandos disponibles:*\n\n/open `<prompt>` \u2014 Enviar prompt\n/model `<alias>` \u2014 Cambiar modelo (pro, flash, m3...)\n/config \u2014 Configuraci\u00f3n personal\n/cancel \u2014 Cancelar prompt\n/status \u2014 Estado de sesi\u00f3n\n/new \u2014 Reiniciar sesi\u00f3n\n/session new|list|switch|delete|info|discover|adopt\n/help \u2014 Este mensaje\n\nTambi\u00e9n pod\u00e9s enviar mensajes directamente o notas de voz."
 STATUS_HEADER = "\U0001f4ca *Estado de la sesi\u00f3n*"
@@ -72,12 +74,19 @@ CONFIG_INVALID_WORKDIR_NOT_FOUND = "El directorio no existe."
 CONFIG_INVALID_WORKDIR_PERMISSION = "Sin permisos para acceder al directorio."
 CONFIG_INVALID_WORKDIR_FORBIDDEN = "No se puede usar ese directorio."
 
-#: Specific copy per typed workdir failure kind (F3). Anything not listed falls
-#: back to ``CONFIG_INVALID_WORKDIR`` (generic "configuraci\u00f3n inv\u00e1lida").
-CONFIG_WORKDIR_FAILURE_COPY = {
-    "outside_root": CONFIG_INVALID_WORKDIR_OUTSIDE,
-    "symlink_escape": CONFIG_INVALID_WORKDIR_OUTSIDE,
-    "not_found": CONFIG_INVALID_WORKDIR_NOT_FOUND,
-    "permission_denied": CONFIG_INVALID_WORKDIR_PERMISSION,
-    "forbidden": CONFIG_INVALID_WORKDIR_FORBIDDEN,
+#: Specific copy per typed workdir failure kind (F3). Keyed by the enum itself,
+#: so a missing/renamed kind is a visible test failure instead of a silent
+#: fallback to the generic ``CONFIG_INVALID_WORKDIR`` copy.
+CONFIG_WORKDIR_FAILURE_COPY: dict[WorkdirFailureKind, str] = {
+    WorkdirFailureKind.OUTSIDE_ROOT: CONFIG_INVALID_WORKDIR_OUTSIDE,
+    WorkdirFailureKind.SYMLINK_ESCAPE: CONFIG_INVALID_WORKDIR_OUTSIDE,
+    WorkdirFailureKind.NOT_FOUND: CONFIG_INVALID_WORKDIR_NOT_FOUND,
+    WorkdirFailureKind.PERMISSION_DENIED: CONFIG_INVALID_WORKDIR_PERMISSION,
+    WorkdirFailureKind.FORBIDDEN: CONFIG_INVALID_WORKDIR_FORBIDDEN,
+    WorkdirFailureKind.NOT_A_DIRECTORY: CONFIG_INVALID_WORKDIR,
+    WorkdirFailureKind.INVALID_NAME: CONFIG_INVALID_WORKDIR,
+    WorkdirFailureKind.CONFLICT: CONFIG_INVALID_WORKDIR,
+    WorkdirFailureKind.DIRECTORY_NOT_EMPTY: CONFIG_INVALID_WORKDIR,
+    WorkdirFailureKind.TARGET_EXISTS: CONFIG_INVALID_WORKDIR,
+    WorkdirFailureKind.GIT_UNAVAILABLE: CONFIG_INVALID_WORKDIR,
 }

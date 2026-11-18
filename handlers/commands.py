@@ -48,7 +48,7 @@ def _workdir_failure_text(strings: Any, kind: WorkdirFailureKind | None) -> str:
     """Map a typed workdir failure to its specific copy (F3)."""
     if kind is None:
         return cast(str, strings.CONFIG_INVALID_WORKDIR)
-    copy: dict[str, str] = strings.CONFIG_WORKDIR_FAILURE_COPY
+    copy: dict[WorkdirFailureKind, str] = strings.CONFIG_WORKDIR_FAILURE_COPY
     return copy.get(kind, cast(str, strings.CONFIG_INVALID_WORKDIR))
 
 
