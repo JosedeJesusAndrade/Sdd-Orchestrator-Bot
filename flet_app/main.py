@@ -25,7 +25,7 @@ if __package__ in (None, ""):
 
 import flet as ft  # noqa: E402
 
-from core_config import BASE_DIR, DEFAULT_MODEL, setup_logger  # noqa: E402
+from core_config import DEFAULT_MODEL, setup_logger  # noqa: E402
 
 # Entry point: attach console + file handlers before anything logs. Importing
 # config/library modules has no logging side effects by design.
@@ -33,6 +33,10 @@ setup_logger()
 
 from flet_app.core.design_system import DS  # noqa: E402
 from flet_app.core.navigation import ScreenHost  # noqa: E402
+from flet_app.data.explorer import ExplorerController  # noqa: E402
+from flet_app.data.model_selector import ModelSelectorController  # noqa: E402
+from flet_app.data.sidebar import SidebarController  # noqa: E402
+from flet_app.data.status_strip import StatusStripController  # noqa: E402
 from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
@@ -88,25 +92,53 @@ async def main(page: ft.Page) -> None:
     core = build_prompt_stack()
     gate = AllowAllGate()
 
+    # FD-09/FD-R1: the app NEVER writes ``settings["workdir"]`` at startup;
+    # ``WorkdirService.select`` stays the only writer. The caption and the
+    # server warm-up share ONE resolved path instead.
+    sidebar = SidebarController(
+        core.conversations_service,
+        core.session_service,
+        core.effective_workdir,
+        core.session_store,
+        CONVERSATION_ID,
+    )
+    status_strip = StatusStripController(core.status_service, CONVERSATION_ID)
+    model_selector = ModelSelectorController(
+        core.model_catalog,
+        core.session_store,
+        CONVERSATION_ID,
+    )
+    explorer = ExplorerController(core.workdir_service, CONVERSATION_ID)
+    data_controllers = (sidebar, status_strip, model_selector, explorer)
+    logger.debug(
+        "Flet data layer lista",
+        extra={
+            "event": "flet_data_layer_ready",
+            "controllers": [type(controller).__name__ for controller in data_controllers],
+        },
+    )
+
     model = DEFAULT_MODEL
-    workdir = str(BASE_DIR)
     try:
         settings = await core.settings_service.get(CONVERSATION_ID)
         model = settings.model
-        workdir = str(settings.workdir)
-
-        # The Flet GUI is the front-end of THIS repository. ``OPENCODE_WORKDIR``
-        # (.env) belongs to the Telegram bot and may point at a parent folder
-        # (e.g. ``...\mono\python``), which is why the caption looked "cut".
-        # When the Flet conversation has no explicit workdir, bind it to the
-        # project root so the caption and the prompts agree on the relevant
-        # directory. Telegram conversations are untouched (separate ids).
-        explicit = await core.session_store.get_all_chat_settings(CONVERSATION_ID)
-        if "workdir" not in explicit:
-            workdir = str(BASE_DIR)
-            await core.settings_service.set(CONVERSATION_ID, "workdir", workdir)
     except Exception:
         logger.exception("No se pudieron leer los settings; usando defaults")
+
+    try:
+        resolved = await core.effective_workdir.resolve(CONVERSATION_ID)
+        workdir = str(resolved.path)
+        logger.info(
+            "Flet workdir resuelto",
+            extra={
+                "event": "flet_workdir_resolved",
+                "workdir": workdir,
+                "source": str(resolved.source),
+            },
+        )
+    except Exception:
+        logger.exception("No se pudo resolver el workdir; usando el fallback")
+        workdir = str(core.effective_workdir.fallback)
 
     def open_menu() -> None:
         page.run_task(show_conversations)
