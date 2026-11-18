@@ -28,6 +28,7 @@ packages = [
     "flet_app",
     "flet_app.components",
     "flet_app.core",
+    "flet_app.data",
     "flet_app.screens",
     "frontends",
     "frontends.telegram",
