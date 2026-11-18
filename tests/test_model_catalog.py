@@ -27,6 +27,7 @@ from services.model_catalog import (
     ModelCatalogSnapshot,
     ModelOption,
     OpenCodeModelCatalog,
+    ProvidersClient,
 )
 from services.opencode_server.client import OpenCodeServerClient
 from tests.conversation_keys import conv
@@ -89,6 +90,18 @@ class FakeSource:
         if self._error is not None:
             raise self._error
         return list(self._options)
+
+
+class FakeProvidersClient:
+    """Providers transport double: implements the ``ProvidersClient`` port."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+        self.calls = 0
+
+    async def list_providers(self) -> dict[str, Any]:
+        self.calls += 1
+        return self._payload
 
 
 class FakeClock:
@@ -223,6 +236,33 @@ async def test_http_happy_path_filters_groups_and_marks_default() -> None:
     offset = snapshot.fetched_at.utcoffset()
     assert offset is not None
     assert offset.total_seconds() == 0
+
+
+async def test_http_source_depends_only_on_the_providers_client_port() -> None:
+    payload = {
+        "providers": [
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "models": {"deepseek-flash": _model("deepseek-flash", "deepseek")},
+            }
+        ]
+    }
+    fake = FakeProvidersClient(payload)
+
+    options = await HttpProvidersSource(fake).fetch()
+
+    assert fake.calls == 1
+    assert [option.id for option in options] == ["deepseek/deepseek-flash"]
+
+
+async def test_real_client_conforms_to_the_providers_client_port() -> None:
+    client = _client(lambda _request: httpx.Response(200, json={"providers": []}))
+    try:
+        port: ProvidersClient = client
+        assert callable(port.list_providers)
+    finally:
+        await client.close()
 
 
 # ── Fallback chain ─────────────────────────────────────────────────────

@@ -40,7 +40,6 @@ from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
     from services.conversation import ConversationKey
-    from services.opencode_server.client import OpenCodeServerClient
 
 logger = get_module_logger(__name__)
 
@@ -92,10 +91,15 @@ class ModelCatalogSnapshot:
     fetched_at: datetime
 
 
-class ModelCatalogPort(Protocol):
-    """The selector's contract: fetch the catalog (``list`` rebuilds the view)."""
+class ProvidersClient(Protocol):
+    """The transport the HTTP source needs: the raw provider catalog payload.
 
-    async def fetch(self) -> list[ModelOption]: ...
+    ``OpenCodeServerClient`` conforms structurally, so :class:`HttpProvidersSource`
+    never couples to the concrete HTTP client. The selector's public contract
+    lives in ``flet_app/data/model_selector`` (``list``), not here.
+    """
+
+    async def list_providers(self) -> dict[str, Any]: ...
 
 
 class ModelSource(Protocol):
@@ -120,7 +124,7 @@ class HttpProvidersSource:
 
     name = SOURCE_HTTP
 
-    def __init__(self, client: OpenCodeServerClient) -> None:
+    def __init__(self, client: ProvidersClient) -> None:
         self._client = client
 
     async def fetch(self) -> list[ModelOption]:
