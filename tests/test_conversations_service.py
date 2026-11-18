@@ -12,7 +12,7 @@ from services.agent_sessions import (
     InvalidSessionIdError,
     Message,
 )
-from services.conversations_service import ConversationsService
+from services.conversations_service import ConversationHistoryError, ConversationsService
 from services.effective_workdir import WorkdirResolution, WorkdirSource
 from services.session_service import SessionNotDiscoveredError, SessionService
 from services.session_store import SessionInfo, SessionStore
@@ -184,6 +184,51 @@ async def test_list_scopes_history_to_the_resolved_workdir() -> None:
 
     assert agent.list_calls == [{"directory": str(Path("C:/wA")), "limit": 50}]
     assert resolver.calls == [conv(42)]
+
+
+class _ScopedAgent:
+    """Agent double that returns a different history per directory."""
+
+    def __init__(self, by_directory: dict[str, list[ConversationSummary]]) -> None:
+        self._by_directory = by_directory
+        self.list_calls: list[dict[str, Any]] = []
+
+    async def list_sessions(
+        self, directory: str | None = None, limit: int = 50
+    ) -> list[ConversationSummary]:
+        self.list_calls.append({"directory": directory, "limit": limit})
+        return list(self._by_directory.get(str(directory), []))
+
+
+async def test_list_returns_only_the_sessions_of_each_workdir() -> None:
+    agent = _ScopedAgent(
+        {
+            str(Path("C:/wA")): [_summary("ses_a")],
+            str(Path("C:/wB")): [_summary("ses_b")],
+        }
+    )
+    store = FakeStore()
+
+    in_a = await _service(
+        cast(Any, agent), store, resolver=FakeResolver("C:/wA")
+    ).list_conversations(conv(42))
+    in_b = await _service(
+        cast(Any, agent), store, resolver=FakeResolver("C:/wB")
+    ).list_conversations(conv(42))
+
+    assert [s.real_id for s in in_a] == ["ses_a"]
+    assert [s.real_id for s in in_b] == ["ses_b"]
+
+
+async def test_list_wraps_history_failures_in_a_typed_error() -> None:
+    class _ExplodingAgent:
+        async def list_sessions(
+            self, directory: str | None = None, limit: int = 50
+        ) -> list[ConversationSummary]:
+            raise RuntimeError("db down")
+
+    with pytest.raises(ConversationHistoryError):
+        await _service(cast(Any, _ExplodingAgent()), FakeStore()).list_conversations(conv(42))
 
 
 # ── open ───────────────────────────────────────────────────────────────

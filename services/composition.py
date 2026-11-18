@@ -218,6 +218,7 @@ def build_prompt_stack(
         session_store=session_store,
         provider_factory=provider_factory,
         effective_workdir=effective_workdir,
+        session_service=session_service,
     )
     conversations_service = ConversationsService(
         agent_sessions,

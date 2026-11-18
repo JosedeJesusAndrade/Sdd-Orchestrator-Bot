@@ -29,6 +29,14 @@ if TYPE_CHECKING:
 _SLUG_MAX_LENGTH = 30
 
 
+class ConversationHistoryError(Exception):
+    """Typed failure raised when the agent history source cannot be read.
+
+    SS-04: a DB/transport failure MUST NOT degrade into a misleading empty
+    list; the view maps this to copy.
+    """
+
+
 def _slugify(title: str, real_id: str) -> str:
     """Turn a conversation title into a valid bot session name."""
     normalized = unicodedata.normalize("NFKD", title)
@@ -77,8 +85,12 @@ class ConversationsService:
         directory: str | None = None
         if self._effective_workdir is not None:
             directory = str((await self._effective_workdir.resolve(conversation_id)).path)
-        summaries = await self._agent_sessions.list_sessions(directory=directory)
-        stored = await self._session_store.list_sessions(conversation_id)
+
+        try:
+            summaries = await self._agent_sessions.list_sessions(directory=directory)
+            stored = await self._session_store.list_sessions(conversation_id)
+        except Exception as exc:
+            raise ConversationHistoryError(str(exc)) from exc
 
         active_name = next((s.name for s in stored if s.is_active), None)
         by_real_id = {s.real_id: s for s in stored if s.real_id}

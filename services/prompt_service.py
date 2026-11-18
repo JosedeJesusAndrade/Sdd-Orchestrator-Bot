@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from services.ai_provider_factory import ProviderFactoryPort
     from services.chat_view import ChatView, ConversationKey, CoreStrings, ProgressHandle
     from services.effective_workdir import EffectiveWorkdir
+    from services.session_service import SessionService
     from services.session_store import SessionInfo, SessionStorePort
 
 logger = get_module_logger(__name__)
@@ -80,12 +81,16 @@ class PromptService:
         provider_factory: ProviderFactoryPort,
         *,
         effective_workdir: EffectiveWorkdir | None = None,
+        session_service: SessionService | None = None,
     ) -> None:
         self._store = session_store
         self._factory = provider_factory
         # Injected by ``build_prompt_stack``. Optional only so unit tests can
         # build a PromptService in isolation; production always passes it.
         self._effective_workdir = effective_workdir
+        # SS-01: ensures a bot session exists BEFORE the first prompt so the
+        # OpenCode ``real_id`` it returns has somewhere to be persisted.
+        self._session_service = session_service
 
         # Per-conversation running tasks
         self._running: dict[ConversationKey, asyncio.Task[Any]] = {}
@@ -178,8 +183,14 @@ class PromptService:
             if task is not None:
                 self._running[conversation_id] = task
 
-            # 1. Resolve session (model already resolved above for logging)
-            session = await self._store.get_active_session(conversation_id)
+            # 1. Resolve session (model already resolved above for logging).
+            # SS-01: bootstrap the active bot session first so the id returned
+            # by the very first prompt can be persisted (``_persist_session_id``).
+            session: SessionInfo | None
+            if self._session_service is not None:
+                session = await self._session_service.ensure_active(conversation_id)
+            else:
+                session = await self._store.get_active_session(conversation_id)
 
             self._log_prompt(conversation_id, prompt_text, model)
 

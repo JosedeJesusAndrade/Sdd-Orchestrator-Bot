@@ -12,7 +12,6 @@ Design decisions (design ``sdd/flet-preparation/design`` #426):
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -20,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from core_config import DEFAULT_SESSION_NAME, INTERNAL_SUBPROCESS_TIMEOUT, OPENCODE_CMD
+from core_config import DEFAULT_SESSION_NAME
 from opencode.client import query_opencode_db
 from persistence.sessions import (
     fetch_opencode_sessions,
@@ -116,6 +115,21 @@ class SessionListSnapshot:
 
     sessions: list[SessionInfo]
     unadopted: list[DiscoveredSession]
+
+
+@dataclass(frozen=True)
+class DeleteOutcome:
+    """Result of an app-only ``/session delete`` (SS-03).
+
+    ``opencode_kept`` is always ``True``: the app removes only the bot record,
+    never the agent history. ``opencode_id`` is the removed session's real id
+    when it had one, so the view can warn the user that the history still
+    exists.
+    """
+
+    deleted_name: str
+    opencode_kept: bool
+    opencode_id: str | None
 
 
 @dataclass(frozen=True)
@@ -228,8 +242,8 @@ class SessionService:
         if kind is SessionCommandKind.DELETE:
             if not command.name:
                 return SessionUsage(kind=kind)
-            real_id = await self.delete(conversation_id, command.name)
-            return SessionDeleted(name=command.name, real_id=real_id)
+            outcome = await self.delete(conversation_id, command.name)
+            return SessionDeleted(name=outcome.deleted_name, real_id=outcome.opencode_id)
 
         if kind is SessionCommandKind.INFO:
             return SessionInfoResult(await self.get_info(conversation_id, command.name))
@@ -248,6 +262,44 @@ class SessionService:
     async def create(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Create a named session and invalidate the discovery cache."""
         session = await self._store.create_session(conversation_id, name)
+        invalidate_opencode_sessions_cache()
+        return session
+
+    async def ensure_active(self, conversation_id: ConversationKey) -> SessionInfo:
+        """Ensure the key has an active bot session (SS-01).
+
+        ``PromptService`` calls this before the first prompt so the OpenCode
+        session id created by that prompt has a bot session to persist into.
+        Idempotent: an already-active session is returned untouched.
+        """
+        return await self._store.ensure_active(conversation_id)
+
+    async def new_chat(self, conversation_id: ConversationKey) -> SessionInfo:
+        """Create and activate the next free ``chat-N`` session (SS-02).
+
+        The name is the smallest positive ``N`` whose ``chat-N`` is unused. The
+        session is active immediately with ``last_used=now``, ``prompt_count=0``
+        and ``real_id=None``. No OpenCode session is pre-created (F-09): the
+        first prompt creates it. The effective workdir is stamped on the record
+        (SS-05).
+        """
+        existing = await self._store.list_sessions(conversation_id)
+        taken = {session.name for session in existing}
+        index = 1
+        while f"chat-{index}" in taken:
+            index += 1
+        name = f"chat-{index}"
+
+        workdir: str | None = None
+        if self._effective_workdir is not None:
+            workdir = str((await self._effective_workdir.resolve(conversation_id)).path)
+
+        session = await self._store.create_session(
+            conversation_id,
+            name,
+            workdir=workdir,
+            last_used=datetime.now(UTC).isoformat(),
+        )
         invalidate_opencode_sessions_cache()
         return session
 
@@ -308,39 +360,33 @@ class SessionService:
             )
         return discovered
 
-    async def delete(self, conversation_id: ConversationKey, name: str) -> str | None:
-        """Delete a stored session and clean it up in OpenCode if it had an ID."""
+    async def delete(self, conversation_id: ConversationKey, name: str) -> DeleteOutcome:
+        """Remove ONLY the bot session record; keep the agent history (SS-03).
+
+        The app must never destroy OpenCode history silently. The removed
+        session's ``real_id`` is returned as ``opencode_id`` so the view can
+        warn that the conversation still exists as an orphan.
+
+        Raises:
+            SessionNotFoundError: when ``name`` does not exist for this key.
+        """
         real_id = await self._store.delete_session(conversation_id, name)
         invalidate_opencode_sessions_cache()
 
-        if real_id:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    OPENCODE_CMD,
-                    "session",
-                    "delete",
-                    real_id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.wait(), timeout=INTERNAL_SUBPROCESS_TIMEOUT)
-                logger.info(
-                    "Deleted OpenCode session %s for chat %s",
-                    real_id,
-                    mask_conversation_key(conversation_id),
-                )
-            except Exception as e:
-                logger.warning(
-                    "OpenCode session delete failed",
-                    extra={
-                        "event": "oc_session_delete_failed",
-                        "real_id": real_id,
-                        "chat_id_masked": mask_conversation_key(conversation_id),
-                        "error_type": type(e).__name__,
-                    },
-                    exc_info=True,
-                )
-        return real_id
+        logger.info(
+            "Session deleted (OpenCode history kept)",
+            extra={
+                "event": "session_deleted_app_only",
+                "session_name": name,
+                "opencode_id": real_id,
+                "chat_id_masked": mask_conversation_key(conversation_id),
+            },
+        )
+        return DeleteOutcome(
+            deleted_name=name,
+            opencode_kept=True,
+            opencode_id=real_id,
+        )
 
     async def enrich(self, real_id: str | None) -> dict[str, Any]:
         """Query OpenCode's DB for message count / created_at / model."""

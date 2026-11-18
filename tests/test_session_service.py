@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from core_config import OPENCODE_CMD
 from services.agent_sessions import ConversationSummary
+from services.effective_workdir import WorkdirResolution, WorkdirSource
 from services.session_service import (
+    DeleteOutcome,
     DiscoveredSession,
     InvalidSessionNameError,
     SessionListSnapshot,
@@ -30,14 +32,20 @@ def _session(
     real_id: str | None = None,
     prompt_count: int = 0,
     title: str | None = None,
+    *,
+    workdir: str | None = None,
+    last_used: str | None = None,
+    is_active: bool = False,
 ) -> SessionInfo:
     return SessionInfo(
         name=name,
         real_id=real_id,
         title=title or name,
         created="2026-05-19T00:00:00+00:00",
-        last_used=None,
+        last_used=last_used,
         prompt_count=prompt_count,
+        is_active=is_active,
+        workdir=workdir,
     )
 
 
@@ -71,20 +79,39 @@ class FakeStore:
     def __init__(self, sessions: list[SessionInfo] | None = None) -> None:
         self.sessions = list(sessions or [])
         self.created: list[tuple[Any, str]] = []
+        self.created_workdirs: list[str | None] = []
+        self.created_last_used: list[str | None] = []
         self.updated_ids: list[tuple[Any, str]] = []
         self.updated_titles: list[tuple[Any, str, str]] = []
         self.deleted: list[tuple[Any, str]] = []
         self.switched: list[tuple[Any, str]] = []
         self.delete_real_id: str | None = None
+        self.ensured: list[Any] = []
 
     async def list_sessions(self, conversation_id: Any) -> list[SessionInfo]:
         return list(self.sessions)
 
-    async def create_session(self, conversation_id: Any, name: str) -> SessionInfo:
-        info = _session(name)
+    async def create_session(
+        self,
+        conversation_id: Any,
+        name: str,
+        *,
+        workdir: str | None = None,
+        last_used: str | None = None,
+    ) -> SessionInfo:
+        info = _session(name, workdir=workdir, last_used=last_used)
         self.sessions.append(info)
         self.created.append((conversation_id, name))
+        self.created_workdirs.append(workdir)
+        self.created_last_used.append(last_used)
         return info
+
+    async def ensure_active(self, conversation_id: Any) -> SessionInfo:
+        self.ensured.append(conversation_id)
+        active = next((s for s in self.sessions if s.is_active), None)
+        if active is not None:
+            return active
+        return await self.create_session(conversation_id, "default")
 
     async def switch_session(self, conversation_id: Any, name: str) -> SessionInfo:
         self.switched.append((conversation_id, name))
@@ -102,8 +129,24 @@ class FakeStore:
         return self.delete_real_id
 
 
-def _service(store: FakeStore) -> SessionService:
-    return SessionService(cast(SessionStore, store))
+class FixedResolver:
+    """Minimal ``EffectiveWorkdir`` double returning one fixed path."""
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self.calls: list[Any] = []
+
+    async def resolve(self, conversation_id: Any) -> WorkdirResolution:
+        self.calls.append(conversation_id)
+        return WorkdirResolution(
+            path=Path(self._path),
+            source=WorkdirSource.SETTING,
+            mismatch=False,
+        )
+
+
+def _service(store: FakeStore, *, resolver: FixedResolver | None = None) -> SessionService:
+    return SessionService(cast(SessionStore, store), effective_workdir=cast(Any, resolver))
 
 
 @pytest.fixture
@@ -325,40 +368,86 @@ async def test_adopt_without_catalog_keeps_the_cli_validation(
     assert store.updated_titles == [(conv(42), "mine", "From CLI")]
 
 
+# ── ensure_active / new_chat ───────────────────────────────────────────
+
+
+async def test_ensure_active_delegates_to_the_store(invalidations: list[bool]) -> None:
+    store = FakeStore([_session("default", is_active=True)])
+    service = _service(store)
+
+    session = await service.ensure_active(conv(42))
+
+    assert session.name == "default"
+    assert store.ensured == [conv(42)]
+    assert invalidations == []
+
+
+async def test_new_chat_creates_chat_1_when_empty(invalidations: list[bool]) -> None:
+    store = FakeStore()
+
+    session = await _service(store).new_chat(conv(42))
+
+    assert session.name == "chat-1"
+    assert session.real_id is None
+    assert session.prompt_count == 0
+    assert session.last_used is not None
+    assert store.created == [(conv(42), "chat-1")]
+    assert store.created_last_used == [session.last_used]
+    assert invalidations == [True]
+
+
+async def test_new_chat_uses_the_smallest_free_chat_n(invalidations: list[bool]) -> None:
+    store = FakeStore([_session("chat-1"), _session("chat-3")])
+
+    session = await _service(store).new_chat(conv(42))
+
+    assert session.name == "chat-2"
+    assert store.created == [(conv(42), "chat-2")]
+    assert invalidations == [True]
+
+
+async def test_new_chat_stamps_the_effective_workdir(invalidations: list[bool]) -> None:
+    store = FakeStore()
+    resolver = FixedResolver("C:/wA")
+
+    session = await _service(store, resolver=resolver).new_chat(conv(42))
+
+    assert store.created_workdirs == [str(Path("C:/wA"))]
+    assert session.workdir == str(Path("C:/wA"))
+    assert resolver.calls == [conv(42)]
+
+
 # ── delete ─────────────────────────────────────────────────────────────
 
 
-async def test_delete_removes_session_and_cleans_up_opencode(
+async def test_delete_keeps_opencode_history_and_returns_the_outcome(
     monkeypatch: pytest.MonkeyPatch, invalidations: list[bool]
 ) -> None:
     store = FakeStore([_session("mine", "ses_1")])
     store.delete_real_id = "ses_1"
-    exec_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    exec_calls: list[tuple[Any, ...]] = []
 
-    class _Proc:
-        async def wait(self) -> int:
-            return 0
+    async def fake_exec(*args: Any, **kwargs: Any) -> None:
+        exec_calls.append(args)
 
-    async def fake_exec(*args: Any, **kwargs: Any) -> _Proc:
-        exec_calls.append((args, kwargs))
-        return _Proc()
+    # Patch the real asyncio module: the service must NOT spawn any
+    # ``opencode session delete`` subprocess, but a stray call would show up.
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", fake_exec)
+    outcome = await _service(store).delete(conv(42), "mine")
 
-    result = await _service(store).delete(conv(42), "mine")
-
-    assert result == "ses_1"
+    assert outcome == DeleteOutcome(
+        deleted_name="mine",
+        opencode_kept=True,
+        opencode_id="ses_1",
+    )
     assert store.deleted == [(conv(42), "mine")]
     assert store.sessions == []
+    assert exec_calls == []
     assert invalidations == [True]
-    assert len(exec_calls) == 1
-    args, kwargs = exec_calls[0]
-    assert args == (OPENCODE_CMD, "session", "delete", "ses_1")
-    assert kwargs["stdout"] is asyncio.subprocess.PIPE
-    assert kwargs["stderr"] is asyncio.subprocess.PIPE
 
 
-async def test_delete_without_real_id_skips_opencode(
+async def test_delete_without_real_id_keeps_history_and_reports_none(
     monkeypatch: pytest.MonkeyPatch, invalidations: list[bool]
 ) -> None:
     store = FakeStore([_session("mine", None)])
@@ -367,31 +456,13 @@ async def test_delete_without_real_id_skips_opencode(
     async def fake_exec(*args: Any, **kwargs: Any) -> None:
         exec_calls.append(args)
 
-    monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    result = await _service(store).delete(conv(42), "mine")
+    outcome = await _service(store).delete(conv(42), "mine")
 
-    assert result is None
+    assert outcome == DeleteOutcome(deleted_name="mine", opencode_kept=True, opencode_id=None)
     assert store.deleted == [(conv(42), "mine")]
     assert exec_calls == []
-    assert invalidations == [True]
-
-
-async def test_delete_swallows_opencode_cleanup_failure(
-    monkeypatch: pytest.MonkeyPatch, invalidations: list[bool]
-) -> None:
-    store = FakeStore([_session("mine", "ses_1")])
-    store.delete_real_id = "ses_1"
-
-    async def failing_exec(*args: Any, **kwargs: Any) -> None:
-        raise OSError("opencode missing")
-
-    monkeypatch.setattr("services.session_service.asyncio.create_subprocess_exec", failing_exec)
-
-    result = await _service(store).delete(conv(42), "mine")
-
-    assert result == "ses_1"
-    assert store.deleted == [(conv(42), "mine")]
     assert invalidations == [True]
 
 

@@ -29,7 +29,8 @@ from services.opencode_cli_backend import (
     _parse_json_output,
 )
 from services.prompt_service import PromptService
-from services.session_store import SessionInfo
+from services.session_service import SessionService
+from services.session_store import SessionInfo, SessionStore
 from tests.conversation_keys import conv
 
 SID = "ses_eb412dc8fffekyxb7vlcWUaIMH"
@@ -400,13 +401,33 @@ async def test_second_prompt_continues_captured_session() -> None:
     backend = _RecordingBackend(
         [
             AIBackendResult(stdout="Hola\n", session_id=SID),
-            AIBackendResult(stdout="Sigo aquÃ­\n", session_id=SID),
+            AIBackendResult(stdout="Sigo aquí\n", session_id=SID),
         ]
     )
     service = PromptService(session_store=store, provider_factory=_Factory(backend))
 
     await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
-    await service.execute(conversation_id=conv(1), prompt_text="Â¿y ahora?", view=_View())
+    await service.execute(conversation_id=conv(1), prompt_text="¿y ahora?", view=_View())
 
     assert backend.session_ids == [None, SID]
     assert store.updated == [(conv(1), SID)]
+
+
+async def test_first_prompt_bootstraps_default_and_persists_the_id(tmp_path: Path) -> None:
+    """SS-01: a fresh key gets a ``default`` bot session and the prompt id sticks."""
+    store = SessionStore(tmp_path / "sessions.json")
+    session_service = SessionService(store)
+    backend = _RecordingBackend([AIBackendResult(stdout="Hola\n", session_id=SID)])
+    service = PromptService(
+        session_store=store,
+        provider_factory=_Factory(backend),
+        session_service=session_service,
+    )
+
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
+
+    active = await store.get_active_session(conv(1))
+    assert active is not None
+    assert active.name == "default"
+    assert active.real_id == SID
+    assert active.prompt_count == 1

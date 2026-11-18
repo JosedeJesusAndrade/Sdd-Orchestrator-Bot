@@ -95,6 +95,9 @@ class SessionInfo:
     last_used: str | None  # ISO 8601 or None
     prompt_count: int
     is_active: bool = False
+    #: Effective workdir the session ran in. ``None`` for legacy records; no
+    #: migration is performed, so an old ``sessions.json`` simply reads ``None``.
+    workdir: str | None = None
 
 
 # ── Domain errors ──────────────────────────────────────────────────────
@@ -280,10 +283,58 @@ class SessionStore:
             last_used=session.get("last_used"),
             prompt_count=session.get("prompt_count", 0),
             is_active=True,
+            workdir=session.get("workdir"),
         )
 
-    async def create_session(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
+    async def ensure_active(self, conversation_id: ConversationKey) -> SessionInfo:
+        """Return the active session, activating ``default`` or creating it.
+
+        This is the store-level half of SS-01: on a fresh key the first prompt
+        must have a bot session to persist the OpenCode ``real_id`` into. The
+        operation is idempotent — an already-active session is returned without
+        writing anything.
+        """
+        active = await self.get_active_session(conversation_id)
+        if active is not None:
+            return active
+
+        data = await self._load()
+        cid = str(conversation_id)
+        chat_data = data.setdefault(cid, {})
+        sessions = chat_data.setdefault("sessions", {})
+
+        if DEFAULT_SESSION_NAME in sessions:
+            chat_data["active"] = DEFAULT_SESSION_NAME
+            await self._save(data)
+            s = sessions[DEFAULT_SESSION_NAME]
+            return SessionInfo(
+                name=DEFAULT_SESSION_NAME,
+                real_id=s.get("id"),
+                title=s.get("title", DEFAULT_SESSION_NAME),
+                created=s.get("created", ""),
+                last_used=s.get("last_used"),
+                prompt_count=s.get("prompt_count", 0),
+                is_active=True,
+                workdir=s.get("workdir"),
+            )
+
+        return await self.create_session(conversation_id, DEFAULT_SESSION_NAME)
+
+    async def create_session(
+        self,
+        conversation_id: ConversationKey,
+        name: str,
+        *,
+        workdir: str | None = None,
+        last_used: str | None = None,
+    ) -> SessionInfo:
         """Create a new named session and set it as active.
+
+        Args:
+            workdir: Optional effective workdir stamped on the record (SS-05).
+                Legacy records never get migrated; they simply read ``None``.
+            last_used: Optional initial ``last_used``. ``new_chat`` passes
+                ``now``; the explicit ``/session new`` path keeps ``None``.
 
         Raises:
             SessionExistsError: if a session with this name already exists.
@@ -297,13 +348,16 @@ class SessionStore:
             raise SessionExistsError(f"Session '{name}' already exists")
 
         now = datetime.now(UTC).isoformat()
-        sessions[name] = {
+        record: dict[str, Any] = {
             "id": None,
             "title": name,
             "created": now,
-            "last_used": None,
+            "last_used": last_used,
             "prompt_count": 0,
         }
+        if workdir is not None:
+            record["workdir"] = workdir
+        sessions[name] = record
         chat_data["active"] = name
         await self._save(data)
 
@@ -320,9 +374,10 @@ class SessionStore:
             real_id=None,
             title=name,
             created=now,
-            last_used=None,
+            last_used=last_used,
             prompt_count=0,
             is_active=True,
+            workdir=workdir,
         )
 
     async def switch_session(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
@@ -358,6 +413,7 @@ class SessionStore:
             last_used=s.get("last_used"),
             prompt_count=s.get("prompt_count", 0),
             is_active=True,
+            workdir=s.get("workdir"),
         )
 
     async def delete_session(self, conversation_id: ConversationKey, name: str) -> str | None:
@@ -425,6 +481,7 @@ class SessionStore:
                     last_used=s.get("last_used"),
                     prompt_count=s.get("prompt_count", 0),
                     is_active=(name == active_name),
+                    workdir=s.get("workdir"),
                 )
             )
         return result
