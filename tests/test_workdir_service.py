@@ -372,7 +372,7 @@ async def test_create_child_with_git_init(home: Path, store: SessionStore) -> No
 async def test_create_child_git_missing_does_not_create(
     home: Path, store: SessionStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.workdir_service.shutil.which", lambda _name: None)
+    monkeypatch.setattr("services.workdir_mutator.shutil.which", lambda _name: None)
 
     result = await _v2(store, home).create_child(home, "new", init_git=True)
 
@@ -392,8 +392,8 @@ async def _failing_exec(*_args: object, **_kwargs: object) -> _FailingProcess:
 async def test_create_child_git_init_failure_removes_dir(
     home: Path, store: SessionStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("services.workdir_service.shutil.which", lambda _name: "git")
-    monkeypatch.setattr("services.workdir_service.asyncio.create_subprocess_exec", _failing_exec)
+    monkeypatch.setattr("services.workdir_mutator.shutil.which", lambda _name: "git")
+    monkeypatch.setattr("services.workdir_mutator.asyncio.create_subprocess_exec", _failing_exec)
 
     result = await _v2(store, home).create_child(home, "new", init_git=True)
 
