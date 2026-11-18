@@ -55,6 +55,15 @@ def _build_list_sql(directory: str, limit: int = DEFAULT_LIMIT) -> str:
     )
 
 
+def _build_count_sql(directory: str) -> str:
+    return (
+        "SELECT COUNT(*) AS session_count "
+        "FROM session s "
+        "WHERE s.parent_id IS NULL "
+        f"AND s.directory = '{_sql_quote(directory)}'"
+    )
+
+
 def _build_messages_sql(real_id: str, limit: int = DEFAULT_LIMIT, before: int | None = None) -> str:
     before_clause = f"\n      AND m.time_created < {int(before)}" if before is not None else ""
     return (
@@ -187,6 +196,18 @@ class OpenCodeSessions:
             timeout=HISTORY_QUERY_TIMEOUT,
         )
         return [_to_summary(row) for row in rows]
+
+    async def count_sessions(self, directory: str | None = None) -> int:
+        """Exact, uncapped count (the list page caps at :data:`MAX_LIMIT`)."""
+        sql = _build_count_sql(self._directory(directory))
+        rows = await query_opencode_db(
+            sql,
+            raise_on_error=True,
+            timeout=HISTORY_QUERY_TIMEOUT,
+        )
+        if not rows:
+            return 0
+        return int(rows[0].get("session_count") or 0)
 
     async def get_messages(
         self, real_id: str, limit: int = DEFAULT_LIMIT, before: int | None = None

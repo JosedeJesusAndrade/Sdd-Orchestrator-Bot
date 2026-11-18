@@ -22,6 +22,7 @@ from opencode.client import OpenCodeDBError, _normalize_sql, query_opencode_db
 from opencode.sessions import (
     HISTORY_QUERY_TIMEOUT,
     OpenCodeSessions,
+    _build_count_sql,
     _build_get_session_sql,
     _build_list_sql,
     _build_messages_sql,
@@ -201,6 +202,27 @@ def test_list_sql_uses_forward_slash_directory(db: sqlite3.Connection) -> None:
     assert len(rows) == 2
 
 
+# ── SQL real: count ────────────────────────────────────────────────────
+
+
+def test_count_sql_counts_only_root_sessions_of_the_directory(
+    db: sqlite3.Connection,
+) -> None:
+    rows = _execute(db, _build_count_sql("C:/project"))
+
+    # Two roots in C:/project; the child and the other directory are excluded.
+    assert rows[0]["session_count"] == 2
+
+
+def test_count_sql_is_not_capped(db: sqlite3.Connection) -> None:
+    for index in range(118):
+        _insert_session(db, real_id=f"ses_bulk{index}", title=f"Bulk {index}")
+
+    rows = _execute(db, _build_count_sql("C:/project"))
+
+    assert rows[0]["session_count"] == 120
+
+
 # ── SQL real: messages ─────────────────────────────────────────────────
 
 
@@ -342,6 +364,53 @@ async def test_list_sessions_escapes_quotes_in_the_directory(
 
     assert "s.directory = 'C:/O''Brien'" in fake.calls[0][0]
     assert _sql_quote("O'Brien") == "O''Brien"
+
+
+async def test_count_sessions_uses_as_posix_and_passes_history_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeQuery([{"session_count": 120}])
+    monkeypatch.setattr("opencode.sessions.query_opencode_db", fake)
+
+    count = await OpenCodeSessions(tmp_path).count_sessions()
+
+    sql, kwargs = fake.calls[0]
+    assert f"s.directory = '{tmp_path.as_posix()}'" in sql
+    assert "s.parent_id IS NULL" in sql
+    assert kwargs == {
+        "raise_on_error": True,
+        "timeout": HISTORY_QUERY_TIMEOUT,
+    }
+    assert count == 120
+
+
+async def test_count_sessions_coerces_the_row_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuery([{"session_count": "42"}])
+    monkeypatch.setattr("opencode.sessions.query_opencode_db", fake)
+
+    assert await OpenCodeSessions().count_sessions("C:/project") == 42
+
+
+async def test_count_sessions_returns_zero_without_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuery([])
+    monkeypatch.setattr("opencode.sessions.query_opencode_db", fake)
+
+    assert await OpenCodeSessions().count_sessions("C:/project") == 0
+
+
+async def test_count_sessions_escapes_quotes_in_the_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuery([{"session_count": 0}])
+    monkeypatch.setattr("opencode.sessions.query_opencode_db", fake)
+
+    await OpenCodeSessions("C:/project").count_sessions(directory="C:/O'Brien")
+
+    assert "s.directory = 'C:/O''Brien'" in fake.calls[0][0]
 
 
 async def test_get_messages_maps_and_joins_parts(

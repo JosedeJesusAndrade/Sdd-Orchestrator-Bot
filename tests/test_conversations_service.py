@@ -66,6 +66,9 @@ class FakeAgentSessions:
         self.message_calls.append({"real_id": real_id, "limit": limit, "before": before})
         return list(self.messages_result)
 
+    async def count_sessions(self, directory: str | None = None) -> int:
+        return len(self.summaries)
+
 
 class FakeStore:
     def __init__(self, sessions: list[SessionInfo] | None = None) -> None:

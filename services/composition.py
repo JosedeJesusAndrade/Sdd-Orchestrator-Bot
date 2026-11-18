@@ -249,6 +249,7 @@ def build_prompt_stack(
             session_store,
             resolved_start_time,
             effective_workdir=effective_workdir,
+            agent_sessions=agent_sessions,
         ),
         health_service=HealthService(session_store, resolved_start_time),
         session_service=session_service,

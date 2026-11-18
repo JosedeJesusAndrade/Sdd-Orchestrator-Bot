@@ -98,6 +98,9 @@ class _FakeHistory:
     ) -> list[ConversationSummary]:
         return []
 
+    async def count_sessions(self, directory: str | None = None) -> int:
+        return 0
+
     async def get_messages(
         self, real_id: str, limit: int = 50, before: int | None = None
     ) -> list[Message]:

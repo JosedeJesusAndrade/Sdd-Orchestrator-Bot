@@ -74,6 +74,10 @@ class AgentSessions(Protocol):
         self, directory: str | None = None, limit: int = 50
     ) -> list[ConversationSummary]: ...
 
+    async def count_sessions(self, directory: str | None = None) -> int:
+        """Exact, uncapped count of root sessions in ``directory``."""
+        ...
+
     async def get_messages(
         self, real_id: str, limit: int = 50, before: int | None = None
     ) -> list[Message]: ...

@@ -108,6 +108,7 @@ def test_effective_workdir_is_injected_into_the_four_consumers(tmp_path: Path) -
     assert core.prompt_service._effective_workdir is resolver
     assert core.conversations_service._effective_workdir is resolver
     assert core.status_service._effective_workdir is resolver
+    assert core.status_service._agent_sessions is core.agent_sessions
     assert core.session_service._effective_workdir is resolver
 
 

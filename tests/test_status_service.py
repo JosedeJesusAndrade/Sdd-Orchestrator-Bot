@@ -1,15 +1,17 @@
-"""Unit tests for StatusService (Fase B).
+"""Unit tests for StatusService (Fase B + flet-data-layer P5).
 
 Covers the observable snapshot contract: an active vs. no session, uptime,
 the timestamp fallback paths preserved byte-for-byte from the old handler,
-and the git-branch lookup (success and both failure paths).
+the async git-branch lookup (success, non-zero, spawn error, timeout and
+event-loop responsiveness), and the ST-02 fields (``workdir``/``provider``/
+``session_count``).
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -61,6 +63,81 @@ class FakeResolver:
         )
 
 
+class FakeAgentSessions:
+    """Count-only double; records every directory it was asked about."""
+
+    def __init__(self, count: int = 0, *, error: Exception | None = None) -> None:
+        self._count = count
+        self._error = error
+        self.calls: list[str | None] = []
+
+    async def count_sessions(self, directory: str | None = None) -> int:
+        self.calls.append(directory)
+        if self._error is not None:
+            raise self._error
+        return self._count
+
+
+class FakeProcess:
+    """Minimal ``asyncio.subprocess.Process`` double."""
+
+    def __init__(
+        self,
+        stdout: bytes = b"main\n",
+        returncode: int = 0,
+        *,
+        delay: float = 0.0,
+    ) -> None:
+        self._stdout = stdout
+        self.returncode = returncode
+        self._delay = delay
+        self.killed = False
+        self.waited = False
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        return self._stdout, b""
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        self.waited = True
+        return self.returncode
+
+
+def _spawn(
+    process: FakeProcess | None = None,
+    *,
+    error: Exception | None = None,
+) -> tuple[Any, list[tuple[tuple[str, ...], dict[str, Any]]]]:
+    calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+    async def fake_spawn(*args: str, **kwargs: Any) -> FakeProcess:
+        calls.append((args, kwargs))
+        if error is not None:
+            raise error
+        assert process is not None
+        return process
+
+    return fake_spawn, calls
+
+
+class RecordingLogger:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def warning(self, message: str, *, extra: dict[str, Any] | None = None, **_: Any) -> None:
+        self.events.append(dict(extra or {}))
+
+    def debug(self, message: str, *, extra: dict[str, Any] | None = None, **_: Any) -> None:
+        self.events.append(dict(extra or {}))
+
+    def info(self, message: str, **_: Any) -> None:  # pragma: no cover - defensive
+        pass
+
+
 def _session(
     *,
     name: str = "work",
@@ -80,17 +157,36 @@ def _session(
     )
 
 
+def _service(
+    session: SessionInfo | None,
+    *,
+    settings: dict[str, Any] | None = None,
+    start_time: float | None = None,
+    resolver: FakeResolver | None = None,
+    agent_sessions: FakeAgentSessions | None = None,
+) -> StatusService:
+    return StatusService(
+        cast(SessionStore, FakeStore(session, model="test/model", settings=settings or {})),
+        start_time=start_time,
+        effective_workdir=cast(Any, resolver),
+        agent_sessions=cast(Any, agent_sessions),
+    )
+
+
 async def _snapshot(
     session: SessionInfo | None,
     *,
     settings: dict[str, Any] | None = None,
     start_time: float | None = None,
     resolver: FakeResolver | None = None,
+    agent_sessions: FakeAgentSessions | None = None,
 ) -> StatusSnapshot:
-    service = StatusService(
-        cast(SessionStore, FakeStore(session, model="test/model", settings=settings or {})),
+    service = _service(
+        session,
+        settings=settings,
         start_time=start_time,
-        effective_workdir=cast(Any, resolver),
+        resolver=resolver,
+        agent_sessions=agent_sessions,
     )
     return await service.snapshot(conv(42))
 
@@ -100,13 +196,9 @@ async def _snapshot(
 
 async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("services.status_service.time.time", lambda: 1000.0)
-    invocations: list[tuple[list[str], dict[str, Any]]] = []
-
-    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
-        invocations.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout="main\n")
-
-    monkeypatch.setattr("services.status_service.subprocess.run", fake_run)
+    fake_spawn, calls = _spawn(FakeProcess(stdout=b"main\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    counts = FakeAgentSessions(3)
 
     service = StatusService(
         cast(
@@ -115,11 +207,12 @@ async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> 
                 _session(),
                 model="deepseek/deepseek-v4-pro",
                 # The legacy setting differs: the resolver must win (WD-02).
-                settings={"workdir": "C:/legacy"},
+                settings={"workdir": "C:/legacy", "provider": "anthropic"},
             ),
         ),
         start_time=940.0,
         effective_workdir=cast(Any, FakeResolver("C:/repo")),
+        agent_sessions=cast(Any, counts),
     )
 
     snapshot = await service.snapshot(conv(42))
@@ -129,18 +222,20 @@ async def test_snapshot_with_active_session(monkeypatch: pytest.MonkeyPatch) -> 
     assert snapshot.session_real_id == "ses_123"
     assert snapshot.model == "deepseek/deepseek-v4-pro"
     assert snapshot.branch == "main"
+    assert snapshot.workdir == str(Path("C:/repo"))
+    assert snapshot.provider == "anthropic"
+    assert snapshot.session_count == 3
     assert snapshot.created == datetime.fromisoformat(_CREATED)
     assert snapshot.last_used == datetime.fromisoformat(_LAST_USED)
     assert snapshot.created_fallback is None
     assert snapshot.last_used_fallback is None
     assert snapshot.prompt_count == 7
     assert snapshot.uptime_seconds == 60
-    assert invocations == [
-        (
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            {"capture_output": True, "text": True, "cwd": str(Path("C:/repo")), "timeout": 5},
-        )
-    ]
+    assert counts.calls == [str(Path("C:/repo"))]
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ("git", "rev-parse", "--abbrev-ref", "HEAD")
+    assert kwargs["cwd"] == str(Path("C:/repo"))
 
 
 async def test_snapshot_without_active_session_uses_defaults(
@@ -154,6 +249,9 @@ async def test_snapshot_without_active_session_uses_defaults(
     assert snapshot.session_real_id is None
     assert snapshot.model == "test/model"
     assert snapshot.branch == "?"
+    assert snapshot.workdir == ""
+    assert snapshot.provider == "opencode"
+    assert snapshot.session_count == 0
     assert snapshot.created is None
     assert snapshot.last_used is None
     assert snapshot.created_fallback is None
@@ -165,13 +263,8 @@ async def test_snapshot_without_active_session_uses_defaults(
 async def test_git_cwd_comes_from_the_resolver_not_the_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    invocations: list[dict[str, Any]] = []
-
-    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
-        invocations.append(kwargs)
-        return SimpleNamespace(returncode=0, stdout="dev\n")
-
-    monkeypatch.setattr("services.status_service.subprocess.run", fake_run)
+    fake_spawn, calls = _spawn(FakeProcess(stdout=b"dev\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
 
     snapshot = await _snapshot(
         _session(),
@@ -180,7 +273,81 @@ async def test_git_cwd_comes_from_the_resolver_not_the_setting(
     )
 
     assert snapshot.branch == "dev"
-    assert [kwargs["cwd"] for kwargs in invocations] == [str(Path("C:/resolved"))]
+    assert [kwargs["cwd"] for _args, kwargs in calls] == [str(Path("C:/resolved"))]
+    assert snapshot.workdir == str(Path("C:/resolved"))
+
+
+# ── ST-02 fields ───────────────────────────────────────────────────────
+
+
+async def test_provider_defaults_to_opencode_when_absent() -> None:
+    snapshot = await _snapshot(_session(), settings={})
+
+    assert snapshot.provider == "opencode"
+
+
+async def test_provider_comes_from_the_effective_settings() -> None:
+    snapshot = await _snapshot(_session(), settings={"provider": "anthropic"})
+
+    assert snapshot.provider == "anthropic"
+
+
+async def test_session_count_is_exact_and_uncapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_spawn, _calls = _spawn(FakeProcess(stdout=b"main\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    counts = FakeAgentSessions(120)
+
+    snapshot = await _snapshot(
+        _session(),
+        resolver=FakeResolver("C:/repo"),
+        agent_sessions=counts,
+    )
+
+    assert snapshot.session_count == 120
+    assert counts.calls == [str(Path("C:/repo"))]
+
+
+async def test_session_count_failure_degrades_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_spawn, _calls = _spawn(FakeProcess(stdout=b"main\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    events: list[str] = []
+    monkeypatch.setattr(
+        "services.status_service.log_exception",
+        lambda event, **_: events.append(event),
+    )
+
+    snapshot = await _snapshot(
+        _session(),
+        resolver=FakeResolver("C:/repo"),
+        agent_sessions=FakeAgentSessions(error=RuntimeError("db down")),
+    )
+
+    assert snapshot.session_count == 0
+    assert events == ["status_session_count_failed"]
+
+
+async def test_count_is_not_requested_without_a_workdir() -> None:
+    counts = FakeAgentSessions(5)
+
+    snapshot = await _snapshot(_session(), settings={}, agent_sessions=counts)
+
+    assert snapshot.session_count == 0
+    assert counts.calls == []
+
+
+async def test_snapshot_is_computed_on_demand_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_spawn, _calls = _spawn(FakeProcess(stdout=b"main\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    counts = FakeAgentSessions(1)
+
+    service = _service(_session(), resolver=FakeResolver("C:/repo"), agent_sessions=counts)
+    assert counts.calls == []
+
+    await service.snapshot(conv(42))
+
+    assert counts.calls == [str(Path("C:/repo"))]
 
 
 # ── Timestamp fallbacks (byte-for-byte old-handler behavior) ───────────
@@ -227,43 +394,97 @@ async def test_empty_and_missing_timestamps_have_no_fallback() -> None:
     assert snapshot.last_used_fallback is None
 
 
-# ── Git branch lookup ──────────────────────────────────────────────────
+# ── Git branch lookup (async, ST-01) ───────────────────────────────────
 
 
-async def test_branch_falls_back_when_git_returns_non_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_branch_falls_back_when_git_returns_non_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_spawn, _calls = _spawn(FakeProcess(stdout=b"", returncode=1))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    recording = RecordingLogger()
+    monkeypatch.setattr("services.status_service.logger", recording)
+
+    snapshot = await _snapshot(_session(), resolver=FakeResolver("C:/repo"))
+
+    assert snapshot.branch == "?"
+    assert any(event.get("event") == "git_branch_lookup_failed" for event in recording.events)
+
+
+async def test_branch_falls_back_when_git_cannot_be_spawned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_spawn, _calls = _spawn(error=OSError("git not found"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    events: list[str] = []
     monkeypatch.setattr(
-        "services.status_service.subprocess.run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""),
+        "services.status_service.log_exception",
+        lambda event, **_: events.append(event),
     )
 
-    snapshot = await _snapshot(_session(), settings={"workdir": "C:/repo"})
+    snapshot = await _snapshot(_session(), resolver=FakeResolver("C:/repo"))
 
     assert snapshot.branch == "?"
+    assert events == ["git_branch_lookup_failed"]
 
 
-async def test_branch_falls_back_when_git_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    def explode(*args: Any, **kwargs: Any) -> None:
-        raise OSError("git not found")
+async def test_git_timeout_degrades_and_logs_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("services.status_service.GIT_TIMEOUT_SECONDS", 0.01)
+    slow = FakeProcess(delay=10.0)
+    fake_spawn, _calls = _spawn(slow)
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+    recording = RecordingLogger()
+    monkeypatch.setattr("services.status_service.logger", recording)
 
-    monkeypatch.setattr("services.status_service.subprocess.run", explode)
-
-    snapshot = await _snapshot(_session(), settings={"workdir": "C:/repo"})
+    snapshot = await _snapshot(_session(), resolver=FakeResolver("C:/repo"))
 
     assert snapshot.branch == "?"
+    assert any(event.get("event") == "git_branch_timeout" for event in recording.events)
+    assert slow.killed is True
+    assert slow.waited is True
+
+
+async def test_slow_git_does_not_block_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A git that takes 0.2 s: the loop must keep scheduling another task.
+    monkeypatch.setattr("services.status_service.GIT_TIMEOUT_SECONDS", 10.0)
+    fake_spawn, _calls = _spawn(FakeProcess(stdout=b"main\n", delay=0.2))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
+
+    service = _service(_session(), resolver=FakeResolver("C:/repo"))
+
+    ticks: list[int] = []
+    stop = asyncio.Event()
+
+    async def heartbeat() -> None:
+        while not stop.is_set():
+            ticks.append(1)
+            await asyncio.sleep(0.01)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    snapshot_task = asyncio.create_task(service.snapshot(conv(42)))
+
+    await asyncio.sleep(0.05)
+    ticks_while_git_pending = len(ticks)
+
+    snapshot = await snapshot_task
+    stop.set()
+    await heartbeat_task
+
+    assert ticks_while_git_pending > 0
+    assert snapshot.branch == "main"
 
 
 async def test_branch_is_unknown_without_workdir_and_skips_subprocess(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    invocations: list[bool] = []
-
-    def fake_run(*args: Any, **kwargs: Any) -> SimpleNamespace:
-        invocations.append(True)
-        return SimpleNamespace(returncode=0, stdout="main\n")
-
-    monkeypatch.setattr("services.status_service.subprocess.run", fake_run)
+    fake_spawn, calls = _spawn(FakeProcess(stdout=b"main\n"))
+    monkeypatch.setattr("services.status_service.asyncio.create_subprocess_exec", fake_spawn)
 
     snapshot = await _snapshot(_session(), settings={})
 
     assert snapshot.branch == "?"
-    assert invocations == []
+    assert calls == []
