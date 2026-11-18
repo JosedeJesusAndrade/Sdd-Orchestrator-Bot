@@ -63,3 +63,21 @@ CONFIG_UNKNOWN_KEY = "Clave desconocida: `{key}`. Us\u00e1: model, timeout, work
 CONFIG_SET = "\u2705 {key} \u2192 `{value}`"
 CONFIG_TIMEOUT_SET = "\u2705 timeout \u2192 {value}s (efectivo en el pr\u00f3ximo prompt)"
 CONFIG_INVALID_TIMEOUT = "Timeout debe ser un n\u00famero entero mayor que 0 y como m\u00e1ximo 86400 segundos (24 horas)."
+CONFIG_INVALID_PROVIDER = (
+    "Provider inv\u00e1lido: `{value}`. Elige uno disponible en el cat\u00e1logo."
+)
+CONFIG_INVALID_WORKDIR = "Configuraci\u00f3n inv\u00e1lida."
+CONFIG_INVALID_WORKDIR_OUTSIDE = "El directorio est\u00e1 fuera del directorio permitido."
+CONFIG_INVALID_WORKDIR_NOT_FOUND = "El directorio no existe."
+CONFIG_INVALID_WORKDIR_PERMISSION = "Sin permisos para acceder al directorio."
+CONFIG_INVALID_WORKDIR_FORBIDDEN = "No se puede usar ese directorio."
+
+#: Specific copy per typed workdir failure kind (F3). Anything not listed falls
+#: back to ``CONFIG_INVALID_WORKDIR`` (generic "configuraci\u00f3n inv\u00e1lida").
+CONFIG_WORKDIR_FAILURE_COPY = {
+    "outside_root": CONFIG_INVALID_WORKDIR_OUTSIDE,
+    "symlink_escape": CONFIG_INVALID_WORKDIR_OUTSIDE,
+    "not_found": CONFIG_INVALID_WORKDIR_NOT_FOUND,
+    "permission_denied": CONFIG_INVALID_WORKDIR_PERMISSION,
+    "forbidden": CONFIG_INVALID_WORKDIR_FORBIDDEN,
+}

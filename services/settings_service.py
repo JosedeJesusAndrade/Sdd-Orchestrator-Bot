@@ -8,6 +8,13 @@ resolution. The handler keeps only argument parsing and message formatting.
   - ``workdir`` delegates to ``WorkdirService.select`` (single-writer rule);
   - ``provider`` is validated against the model catalog's provider ids, and is
     accepted when the catalog is empty/degraded.
+
+Orthogonalization F3 (the intended change):
+  - the ``WorkdirService`` is REQUIRED for the workdir write — there is no
+    direct-persistence fallback left, so the single writer cannot be bypassed;
+  - failures keep their type: ``InvalidWorkdirError`` carries the
+    ``WorkdirFailureKind`` and ``InvalidProviderError`` the rejected provider,
+    so the view can render specific copy instead of the timeout message.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, resolve_model
 from services.effective_workdir import env_fallback_workdir
 from services.session_store import SessionStore
-from services.workdir_service import WorkdirFailure
+from services.workdir_failures import WorkdirFailure, WorkdirFailureKind
 
 if TYPE_CHECKING:
     from services.conversation import ConversationKey
@@ -54,6 +61,40 @@ class UnknownSettingError(KeyError):
 
 class InvalidSettingValueError(ValueError):
     """Raised when a setting value fails validation (e.g. non-numeric timeout)."""
+
+
+class InvalidWorkdirError(InvalidSettingValueError):
+    """Raised when a ``workdir`` value is rejected (F3).
+
+    ``kind`` is the typed failure returned by ``WorkdirService.select``; it is
+    ``None`` only when no ``WorkdirService`` was injected (a wiring error). The
+    view maps it to the specific copy, never to the timeout message.
+    """
+
+    def __init__(
+        self,
+        kind: WorkdirFailureKind | None,
+        path: Path | None = None,
+        detail: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.path = path
+        self.detail = detail
+        if detail is not None:
+            message = detail
+        elif kind is not None:
+            message = kind.value
+        else:
+            message = "WorkdirService is required to set the workdir"
+        super().__init__(message)
+
+
+class InvalidProviderError(InvalidSettingValueError):
+    """Raised when a ``provider`` value is not offered by the catalog (F3)."""
+
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        super().__init__(provider)
 
 
 @dataclass(frozen=True)
@@ -150,18 +191,18 @@ class SettingsService:
         return value
 
     async def _set_workdir(self, conversation_id: ConversationKey, raw_value: str) -> str:
-        """Persist via ``WorkdirService.select`` (the single writer, WD-02)."""
+        """Persist via ``WorkdirService.select`` — the ONLY writer (F3, WD-02).
+
+        The service is required for this write: the settings layer never persists
+        ``workdir`` directly. When it is missing the call fails with a typed
+        error instead of silently bypassing the single writer.
+        """
         if self._workdir_service is None:
-            # Legacy compatibility seam: a bare ``SettingsService`` (as built by
-            # older unit/characterization fixtures) keeps the historical direct
-            # persistence. Production composition ALWAYS injects the service, so
-            # the only writer is ``WorkdirService._persist_workdir``.
-            await self._store.set_chat_setting(conversation_id, "workdir", raw_value)
-            return raw_value
+            raise InvalidWorkdirError(None)
 
         result = await self._workdir_service.select(conversation_id, Path(raw_value))
         if isinstance(result, WorkdirFailure):
-            raise InvalidSettingValueError(result.detail or result.kind.value)
+            raise InvalidWorkdirError(result.kind, result.path, result.detail)
         return str(result.path)
 
     async def _set_provider(self, conversation_id: ConversationKey, raw_value: str) -> str:
@@ -170,7 +211,7 @@ class SettingsService:
             snapshot = await self._model_catalog.list(conversation_id)
             providers = {option.id.partition("/")[0] for option in snapshot.options}
             if not snapshot.degraded and providers and raw_value not in providers:
-                raise InvalidSettingValueError(raw_value)
+                raise InvalidProviderError(raw_value)
 
         await self._store.set_chat_setting(conversation_id, "provider", raw_value)
         return raw_value

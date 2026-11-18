@@ -12,7 +12,7 @@ Phase 2 logging:
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -25,7 +25,13 @@ from handlers import authorized
 from handlers._guards import require_chat, require_message
 from locales import get_strings
 from services.prompt_service import PromptAlreadyRunningError
-from services.settings_service import InvalidSettingValueError, UnknownSettingError
+from services.settings_service import (
+    InvalidProviderError,
+    InvalidSettingValueError,
+    InvalidWorkdirError,
+    UnknownSettingError,
+)
+from services.workdir_failures import WorkdirFailureKind
 from telegram_config import CONTAINER_KEY
 from utils.logging import get_module_logger, mask_chat_id
 from utils.time_formatting import relative_time
@@ -36,6 +42,14 @@ logger = get_module_logger(__name__)
 def _get_container(context: ContextTypes.DEFAULT_TYPE) -> AppContainer:
     """Extract the typed AppContainer from PTB context."""
     return cast(AppContainer, context.application.bot_data[CONTAINER_KEY])
+
+
+def _workdir_failure_text(strings: Any, kind: WorkdirFailureKind | None) -> str:
+    """Map a typed workdir failure to its specific copy (F3)."""
+    if kind is None:
+        return cast(str, strings.CONFIG_INVALID_WORKDIR)
+    copy: dict[str, str] = strings.CONFIG_WORKDIR_FAILURE_COPY
+    return copy.get(kind, cast(str, strings.CONFIG_INVALID_WORKDIR))
 
 
 @authorized
@@ -266,6 +280,12 @@ async def config_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         value = await container.settings_service.set(key, setting, args[1])
     except UnknownSettingError:
         await msg.reply_text(strings.CONFIG_UNKNOWN_KEY.format(key=setting))
+        return
+    except InvalidWorkdirError as error:
+        await msg.reply_text(_workdir_failure_text(strings, error.kind))
+        return
+    except InvalidProviderError as error:
+        await msg.reply_text(strings.CONFIG_INVALID_PROVIDER.format(value=error.provider))
         return
     except InvalidSettingValueError:
         await msg.reply_text(strings.CONFIG_INVALID_TIMEOUT)

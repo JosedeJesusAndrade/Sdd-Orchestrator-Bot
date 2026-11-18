@@ -21,10 +21,13 @@ from services.model_catalog import ModelCatalogSnapshot, ModelOption, OpenCodeMo
 from services.session_store import SessionStore
 from services.settings_service import (
     ChatSettings,
+    InvalidProviderError,
     InvalidSettingValueError,
+    InvalidWorkdirError,
     SettingsService,
     UnknownSettingError,
 )
+from services.workdir_failures import WorkdirFailureKind
 from services.workdir_service import WorkdirService
 from tests.conversation_keys import conv
 
@@ -85,15 +88,21 @@ async def test_get_applies_defaults_only_where_values_are_missing() -> None:
 # ── set(): persistence and validation ──────────────────────────────────
 
 
-async def test_set_persists_and_get_reflects_it() -> None:
+async def test_set_persists_and_get_reflects_it(tmp_path: Path) -> None:
     store = FakeStore()
-    service = _service(store)
+    home = _home(tmp_path)
+    project = home / "project"
+    project.mkdir()
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
 
-    value = await service.set(conv(42), "workdir", "C:/project")
+    value = await service.set(conv(42), "workdir", str(project))
 
-    assert value == "C:/project"
-    assert store.set_calls == [(conv(42), "workdir", "C:/project")]
-    assert (await service.get(conv(42))).workdir == "C:/project"
+    assert value == str(project.resolve())
+    assert store.set_calls == [(conv(42), "workdir", str(project.resolve()))]
+    assert (await service.get(conv(42))).workdir == str(project.resolve())
 
 
 async def test_set_timeout_coerces_to_int_and_persists() -> None:
@@ -236,15 +245,18 @@ async def test_get_value_unknown_key_raises() -> None:
 
 async def test_settings_round_trip_through_real_session_store(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.json")
-    service = _service(store)
+    home = _home(tmp_path)
+    project = home / "project"
+    project.mkdir()
+    service = SettingsService(store, workdir_service=WorkdirService(store, home=home))
 
-    await service.set(conv("flet-user"), "workdir", "C:/project")
+    await service.set(conv("flet-user"), "workdir", str(project))
 
     settings = await service.get(conv("flet-user"))
-    assert settings.workdir == "C:/project"
+    assert settings.workdir == str(project.resolve())
 
     persisted = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
-    assert persisted["flet-user"]["settings"]["workdir"] == "C:/project"
+    assert persisted["flet-user"]["settings"]["workdir"] == str(project.resolve())
 
 
 # ── SET-01: workdir delegates to WorkdirService.select ─────────────────
@@ -285,6 +297,20 @@ async def test_set_workdir_non_git_is_accepted(tmp_path: Path) -> None:
     assert await service.set(conv(42), "workdir", str(plain)) == str(plain.resolve())
 
 
+async def test_set_workdir_without_service_raises_and_does_not_write() -> None:
+    """F3: a missing ``WorkdirService`` must not bypass the single writer."""
+    store = FakeStore()
+    service = _service(store)
+
+    with pytest.raises(InvalidWorkdirError) as exc:
+        await service.set(conv(42), "workdir", "C:/project")
+
+    assert exc.value.kind is None
+    assert isinstance(exc.value, InvalidSettingValueError)
+    assert store.set_calls == []
+    assert store.settings == {}
+
+
 async def test_set_workdir_outside_home_is_rejected(tmp_path: Path) -> None:
     store = FakeStore()
     home = _home(tmp_path)
@@ -293,9 +319,10 @@ async def test_set_workdir_outside_home_is_rejected(tmp_path: Path) -> None:
         workdir_service=WorkdirService(cast(Any, store), home=home),
     )
 
-    with pytest.raises(InvalidSettingValueError):
+    with pytest.raises(InvalidWorkdirError) as exc:
         await service.set(conv(42), "workdir", str(tmp_path / "elsewhere"))
 
+    assert exc.value.kind is WorkdirFailureKind.OUTSIDE_ROOT
     assert store.set_calls == []
 
 
@@ -307,9 +334,10 @@ async def test_set_workdir_missing_is_rejected(tmp_path: Path) -> None:
         workdir_service=WorkdirService(cast(Any, store), home=home),
     )
 
-    with pytest.raises(InvalidSettingValueError):
+    with pytest.raises(InvalidWorkdirError) as exc:
         await service.set(conv(42), "workdir", str(home / "nope"))
 
+    assert exc.value.kind is WorkdirFailureKind.NOT_FOUND
     assert store.set_calls == []
 
 
@@ -367,9 +395,11 @@ async def test_set_provider_unknown_is_rejected() -> None:
     )
     service = _provider_service(store, snapshot)
 
-    with pytest.raises(InvalidSettingValueError):
+    with pytest.raises(InvalidProviderError) as exc:
         await service.set(conv(42), "provider", "nope")
 
+    assert exc.value.provider == "nope"
+    assert isinstance(exc.value, InvalidSettingValueError)
     assert store.set_calls == []
 
 

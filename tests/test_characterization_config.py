@@ -8,6 +8,7 @@ service wired to an in-memory store.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -19,6 +20,7 @@ from handlers.commands import config_command, help_command, model_command
 from locales import get_strings
 from services.session_store import SessionStore
 from services.settings_service import SettingsService
+from services.workdir_service import WorkdirService
 from tests.handler_fakes import CHAT_ID, FakeMessage, make_context, make_update
 
 
@@ -50,8 +52,13 @@ async def _run(
     msg: FakeMessage,
     store: _FakeSettingsStore,
     args: list[str] | None,
+    *,
+    workdir_service: WorkdirService | None = None,
 ) -> None:
-    service = SettingsService(cast(SessionStore, store))
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=workdir_service,
+    )
     container = SimpleNamespace(settings_service=service)
     await config_command(make_update(msg), make_context(container, args=args))
 
@@ -105,14 +112,67 @@ async def test_key_is_lowercased_before_lookup() -> None:
     assert "model → `deepseek/deepseek-v4-pro`" in msg.reply_texts[-1]
 
 
-async def test_sets_another_known_key_with_generic_confirmation() -> None:
+async def test_sets_workdir_through_the_single_writer(tmp_path: Path) -> None:
+    """Deliberate F3 update: the production path injects ``WorkdirService``.
+
+    The legacy direct-write fallback is gone, so this exercises the REAL
+    behavior: a valid directory is persisted by ``WorkdirService.select``.
+    """
+    store = _FakeSettingsStore()
+    home = tmp_path / "home"
+    home.mkdir()
+    project = home / "project"
+    project.mkdir()
+    msg = FakeMessage()
+
+    await _run(
+        msg,
+        store,
+        ["workdir", str(project)],
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    assert store.settings["workdir"] == str(project.resolve())
+    assert f"workdir → `{project.resolve()}`" in msg.reply_texts[-1]
+
+
+@pytest.mark.parametrize(
+    ("args", "copy_attr"),
+    [
+        (("elsewhere",), "CONFIG_INVALID_WORKDIR_OUTSIDE"),
+        (("home/missing",), "CONFIG_INVALID_WORKDIR_NOT_FOUND"),
+    ],
+)
+async def test_invalid_workdir_renders_its_specific_copy(
+    tmp_path: Path, args: tuple[str, ...], copy_attr: str
+) -> None:
+    """F3: the typed failure kind picks the copy, not the timeout message."""
+    store = _FakeSettingsStore()
+    home = tmp_path / "home"
+    home.mkdir()
+    msg = FakeMessage()
+
+    await _run(
+        msg,
+        store,
+        ["workdir", str(tmp_path / args[0])],
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    assert msg.reply_texts[-1] == getattr(get_strings(), copy_attr)
+    assert msg.reply_texts[-1] != get_strings().CONFIG_INVALID_TIMEOUT
+    assert store.set_calls == []
+    assert "workdir" not in store.settings
+
+
+async def test_sets_provider_with_generic_confirmation() -> None:
     store = _FakeSettingsStore()
     msg = FakeMessage()
 
-    await _run(msg, store, ["workdir", "C:/project"])
+    await _run(msg, store, ["provider", "opencode"])
 
-    assert store.settings["workdir"] == "C:/project"
-    assert "workdir → `C:/project`" in msg.reply_texts[-1]
+    assert store.settings["provider"] == "opencode"
+    assert "provider → `opencode`" in msg.reply_texts[-1]
 
 
 @pytest.mark.parametrize("raw", ["1", "86400"])
