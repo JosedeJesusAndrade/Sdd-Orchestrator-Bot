@@ -214,11 +214,7 @@ MODEL_ALIASES = {
     },
     "minimax": {
         "m3": "minimax/MiniMax-M3",
-        "m27": "minimax/MiniMax-M2.7",
-        "m27-fast": "minimax/MiniMax-M2.7-highspeed",
         "minimax-m3": "minimax/MiniMax-M3",
-        "minimax-m27": "minimax/MiniMax-M2.7",
-        "minimax-m27-highspeed": "minimax/MiniMax-M2.7-highspeed",
     },
 }
 

@@ -15,7 +15,7 @@ import pytest
 
 from core_config import DEFAULT_MODEL
 from frontends.telegram.keys import telegram_key
-from handlers.commands import config_command, model_command
+from handlers.commands import config_command, help_command, model_command
 from locales import get_strings
 from services.session_store import SessionStore
 from services.settings_service import SettingsService
@@ -178,3 +178,31 @@ async def test_model_command_still_sets_the_effective_model() -> None:
     resolved = "deepseek/deepseek-flash"
     assert await store.get_model(telegram_key(CHAT_ID)) == resolved
     assert f"`{resolved}`" in msg.reply_texts[-1]
+
+
+# ── MD-06: dangling MiniMax aliases removed ─────────────────────────────
+
+
+async def test_model_command_no_longer_resolves_m27() -> None:
+    store = _FakeSettingsStore()
+    msg = FakeMessage()
+    service = SettingsService(cast(SessionStore, store))
+    container = SimpleNamespace(settings_service=service, session_store=store)
+
+    await model_command(make_update(msg), make_context(container, args=["m27"]))
+
+    assert await store.get_model(telegram_key(CHAT_ID)) == "m27"
+
+
+async def test_help_command_has_no_dangling_minimax_aliases() -> None:
+    msg = FakeMessage()
+
+    await help_command(make_update(msg), make_context(SimpleNamespace()))
+
+    text = msg.reply_texts[-1]
+    assert "m27" not in text
+    assert "minimax-m27" not in text
+
+
+def test_locale_help_text_has_no_dangling_minimax_aliases() -> None:
+    assert "m27" not in get_strings().HELP_TEXT

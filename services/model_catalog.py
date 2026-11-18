@@ -161,7 +161,7 @@ class AliasModelsSource:
 
     Alias *keys* (``pro``, ``flash``, ...) are never options; only the
     ``provider/model`` values are exposed (MD-03). The mapping is read, never
-    mutated — the dangling ``m27`` cleanup is a separate change (MD-06 / P7).
+    mutated.
     """
 
     name = SOURCE_ALIASES

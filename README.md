@@ -13,7 +13,7 @@ La arquitectura es un **core frontend-agnóstico**: la lógica de negocio vive e
 ## Características
 
 - Múltiples sesiones por chat, con persistencia en `sessions.json` y cambio explícito entre sesiones activas
-- Multi-modelo mediante `AIProviderFactory` y alias (DeepSeek `pro`/`flash`, MiniMax `m3`/`m27`/`m27-fast`); hoy solo se registra el provider `opencode`
+- Multi-modelo mediante `AIProviderFactory` y alias (DeepSeek `pro`/`flash`, MiniMax `m3`); hoy solo se registra el provider `opencode`
 - Comandos de CI/CD desde Telegram: `/pr` crea un Pull Request con `gh`, `/update` reinicia el bot con la última versión
 - i18n centralizada en `locales/es.py`, accesible vía `get_strings()`
 - `SessionStore` thread-safe como única fuente de verdad para el estado
@@ -276,7 +276,7 @@ Para el detalle de decisiones y el porqué, consulta los ADRs en [`docs/adr/`](d
 | `/help` | Lista de comandos disponibles |
 | `/status` | Estado de la sesión, modelo, uptime |
 | `/new` | Reinicia la sesión activa |
-| `/model <alias>` | Cambia el modelo (por ejemplo `pro`, `flash`, `m3`, `m27`) |
+| `/model <alias>` | Cambia el modelo (por ejemplo `pro`, `flash`, `m3`) |
 | `/config` | Ajusta modelo, timeout, workdir y provider por chat |
 | `/cancel` | Cancela el prompt en ejecución |
 | `/open <prompt>` | Envía un prompt explícito al backend |

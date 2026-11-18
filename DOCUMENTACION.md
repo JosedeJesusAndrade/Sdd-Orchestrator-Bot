@@ -316,11 +316,7 @@ modelo efectivo del prompt. `/config` y `/model` comparten el mismo valor.
 | `deepseek-v4-pro` | `deepseek/deepseek-v4-pro` |
 | `deepseek-flash` | `deepseek/deepseek-flash` |
 | `m3` | `minimax/MiniMax-M3` |
-| `m27` | `minimax/MiniMax-M2.7` |
-| `m27-fast` | `minimax/MiniMax-M2.7-highspeed` |
 | `minimax-m3` | `minimax/MiniMax-M3` |
-| `minimax-m27` | `minimax/MiniMax-M2.7` |
-| `minimax-m27-highspeed` | `minimax/MiniMax-M2.7-highspeed` |
 
 `DEFAULT_MODEL` es `deepseek/deepseek-flash`. `resolve_model()` devuelve el
 valor tal cual si no coincide con ningún alias, y el backend lo pasa al agente
@@ -565,7 +561,7 @@ GUI muestra un aviso para reintentar en el próximo mensaje.
 ### 7.3 `/model`
 
 - Sin argumentos: muestra el modelo actual.
-- Con argumento: resuelve alias (`pro`, `flash`, `m3`, `m27`, `m27-fast`, …) y
+- Con argumento: resuelve alias (`pro`, `flash`, `m3`, …) y
   guarda el valor en la clave superior `model`.
 
 ### 7.4 `/session`

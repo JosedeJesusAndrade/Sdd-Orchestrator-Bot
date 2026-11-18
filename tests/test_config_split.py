@@ -95,6 +95,20 @@ def test_symbols_live_in_the_right_half() -> None:
     assert result.stdout.strip() == "[] [] []"
 
 
+def test_dangling_minimax_aliases_are_gone() -> None:
+    """MD-06: the absent MiniMax M2.7 aliases no longer resolve."""
+    from core_config import DEFAULT_MODEL, MODEL_ALIASES, resolve_model
+
+    minimax = MODEL_ALIASES["minimax"]
+    for dangling in ("m27", "m27-fast", "minimax-m27", "minimax-m27-highspeed"):
+        assert dangling not in minimax
+        assert resolve_model(dangling) == dangling
+
+    assert resolve_model("flash") == "deepseek/deepseek-flash"
+    assert resolve_model("m3") == "minimax/MiniMax-M3"
+    assert DEFAULT_MODEL == "deepseek/deepseek-flash"
+
+
 def test_flet_main_imports_without_telegram_vars(tmp_path: Path) -> None:
     """Prove the Flet entry point does not depend on any Telegram config."""
     env = {
