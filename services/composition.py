@@ -34,9 +34,9 @@ from services.agent_sessions import AgentSessions
 from services.ai_provider_factory import AIProviderFactory
 from services.conversations_service import ConversationsService
 from services.effective_workdir import (
-    ENV_FALLBACK_WORKDIR,
-    PROJECT_ROOT,
     EffectiveWorkdir,
+    env_fallback_workdir,
+    project_root,
 )
 from services.health_service import HealthService
 from services.model_catalog import (
@@ -105,9 +105,9 @@ def build_prompt_stack(
     sessions_path: str | Path = SESSIONS_PATH,
     default_provider: str = "opencode",
     opencode_cmd: str = OPENCODE_CMD,
-    workdir: str = str(ENV_FALLBACK_WORKDIR),
+    workdir: str | None = None,
     timeout: int = OPENCODE_TIMEOUT,
-    sessions_directory: str | Path = PROJECT_ROOT,
+    sessions_directory: str | Path | None = None,
     start_time: float | None = None,
     backend: str = OPENCODE_BACKEND,
     server_host: str = OPENCODE_SERVER_HOST,
@@ -146,6 +146,11 @@ def build_prompt_stack(
             f"OPENCODE_BACKEND inválido: {backend!r}. Valores permitidos: 'server', 'cli'."
         )
 
+    resolved_workdir = str(env_fallback_workdir()) if workdir is None else workdir
+    resolved_sessions_directory = (
+        project_root() if sessions_directory is None else sessions_directory
+    )
+
     session_store = SessionStore(Path(sessions_path))
     resolved_start_time = time.time() if start_time is None else start_time
 
@@ -153,11 +158,11 @@ def build_prompt_stack(
     # effective_workdir -> session_service -> prompt_service. Every consumer of
     # the effective workdir shares THIS resolver so prompts, history, status and
     # session stamps can never disagree.
-    agent_sessions = OpenCodeSessions(sessions_directory)
+    agent_sessions = OpenCodeSessions(resolved_sessions_directory)
     effective_workdir = EffectiveWorkdir(
         session_store,
         agent_sessions,
-        fallback=Path(workdir),
+        fallback=Path(resolved_workdir),
     )
 
     provider_factory = AIProviderFactory(default_provider=default_provider)
@@ -173,14 +178,14 @@ def build_prompt_stack(
                 port=server_port,
                 password=server_password,
                 binary=server_binary,
-                directory=workdir,
+                directory=resolved_workdir,
                 allow_remote=server_allow_remote,
             )
         )
         client = server_client or OpenCodeServerClient(
             manager.base_url,
             server_password,
-            workdir,
+            resolved_workdir,
         )
         resolved_port = (
             permission_port
@@ -205,7 +210,7 @@ def build_prompt_stack(
             "opencode",
             OpenCodeCLIBackend,
             opencode_cmd=opencode_cmd,
-            workdir=workdir,
+            workdir=resolved_workdir,
             timeout=timeout,
         )
 
@@ -238,7 +243,7 @@ def build_prompt_stack(
         AliasModelsSource(),
     ]
     model_catalog = OpenCodeModelCatalog(model_sources, session_store)
-    workdir_service = WorkdirService(session_store, root=Path(workdir))
+    workdir_service = WorkdirService(session_store, root=Path(resolved_workdir))
 
     return CoreStack(
         session_store=session_store,

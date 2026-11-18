@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT, resolve_model
-from services.effective_workdir import ENV_FALLBACK_WORKDIR
+from services.effective_workdir import env_fallback_workdir
 from services.session_store import SessionStore
 from services.workdir_service import WorkdirFailure
 
@@ -37,9 +37,15 @@ _MAX_TIMEOUT_SECONDS = 86400
 _DEFAULTS: dict[str, Any] = {
     "model": DEFAULT_MODEL,
     "timeout": OPENCODE_TIMEOUT,
-    "workdir": str(ENV_FALLBACK_WORKDIR),
     "provider": "opencode",
 }
+
+
+def _default_value(key: str) -> Any:
+    """Resolve a setting default; ``workdir`` stays lazy via the facade."""
+    if key == "workdir":
+        return str(env_fallback_workdir())
+    return _DEFAULTS[key]
 
 
 class UnknownSettingError(KeyError):
@@ -85,7 +91,7 @@ class SettingsService:
         return ChatSettings(
             model=await self._store.get_model(conversation_id),
             timeout=raw.get("timeout", OPENCODE_TIMEOUT),
-            workdir=raw.get("workdir", str(ENV_FALLBACK_WORKDIR)),
+            workdir=raw.get("workdir", str(env_fallback_workdir())),
             provider=raw.get("provider", "opencode"),
         )
 
@@ -98,7 +104,7 @@ class SettingsService:
         self._ensure_known(key)
         if key == "model":
             return await self._store.get_model(conversation_id)
-        return await self._store.get_chat_setting(conversation_id, key, _DEFAULTS[key])
+        return await self._store.get_chat_setting(conversation_id, key, _default_value(key))
 
     async def set(self, conversation_id: ConversationKey, key: str, raw_value: str) -> str | int:
         """Validate and persist one setting, returning the stored value.

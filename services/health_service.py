@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from persistence.sessions import fetch_opencode_sessions
-from services.effective_workdir import PROJECT_ROOT
+from services.effective_workdir import project_root
 from services.session_store import SessionStore
 from utils.logging import get_module_logger, log_exception
 
@@ -113,9 +113,9 @@ class HealthService:
 
     @staticmethod
     def _read_version() -> str:
-        """Read the project version from ``pyproject.toml`` via ``PROJECT_ROOT``."""
+        """Read the project version from ``pyproject.toml`` via ``project_root``."""
         try:
-            content = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+            content = (project_root() / "pyproject.toml").read_text(encoding="utf-8")
             match = re.search(r'version\s*=\s*"([^"]+)"', content)
             return match.group(1) if match else "?"
         except Exception:

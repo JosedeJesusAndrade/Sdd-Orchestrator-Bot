@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from core_config import OPENCODE_TIMEOUT, PROGRESS_UPDATE_INTERVAL
-from services.effective_workdir import ENV_FALLBACK_WORKDIR
+from services.effective_workdir import env_fallback_workdir
 from utils.logging import get_module_logger, log_exception
 
 if TYPE_CHECKING:
@@ -320,7 +320,7 @@ class PromptService:
             workdir = str((await self._effective_workdir.resolve(conversation_id)).path)
         else:
             workdir = await self._store.get_chat_setting(
-                conversation_id, "workdir", str(ENV_FALLBACK_WORKDIR)
+                conversation_id, "workdir", str(env_fallback_workdir())
             )
         agent = await self._store.get_chat_setting(conversation_id, "agent", "sdd-orchestrator")
 

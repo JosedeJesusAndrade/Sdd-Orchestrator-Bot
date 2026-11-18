@@ -14,7 +14,12 @@ remains the only writer.
 The module is also the FACADE for the two environment tokens: it is the only
 module under ``services/`` allowed to reference
 ``core_config.OPENCODE_WORKDIR``/``core_config.BASE_DIR``. Everyone else imports
-:data:`ENV_FALLBACK_WORKDIR` / :data:`PROJECT_ROOT` from here.
+:func:`env_fallback_workdir` / :func:`project_root` from here.
+
+The facade exposes LAZY functions only (orthogonalization F1): a module-level
+constant would freeze the env value at import time and defeat the ``/wdir``
+characterization tests, which monkeypatch ``core_config.OPENCODE_WORKDIR`` after
+import. One mechanism, one source of truth.
 """
 
 from __future__ import annotations
@@ -36,26 +41,22 @@ if TYPE_CHECKING:
 
 logger = get_module_logger(__name__)
 
-#: Env-derived default workdir (``OPENCODE_WORKDIR``, which defaults to
-#: ``BASE_DIR``). Exposed as ``Path`` so no consumer re-parses the env string.
-ENV_FALLBACK_WORKDIR: Path = Path(core_config.OPENCODE_WORKDIR)
-
-#: The project root (the old ``core_config.BASE_DIR``). Consumers that only need
-#: ``pyproject.toml`` / the repo directory import this instead of the token.
-PROJECT_ROOT: Path = Path(core_config.BASE_DIR)
-
 
 def env_fallback_workdir() -> Path:
     """Read the env-derived fallback LAZILY as a ``Path``.
 
-    The import-time :data:`ENV_FALLBACK_WORKDIR` constant is what composition
-    injects into :class:`EffectiveWorkdir`; this function exists for the legacy
-    ``WorkdirService(root=None)`` seam, whose characterization tests monkeypatch
-    ``core_config.OPENCODE_WORKDIR`` *after* import and then construct the service.
-    Keeping the token here preserves the P3 boundary gate: only this module may
-    reference it.
+    Called at use time so the legacy ``WorkdirService(root=None)`` seam honors
+    tests that monkeypatch ``core_config.OPENCODE_WORKDIR`` *after* import;
+    composition calls it too, then injects the value into
+    :class:`EffectiveWorkdir`. Keeping the token here preserves the P3 boundary
+    gate: only this module may reference it.
     """
     return Path(core_config.OPENCODE_WORKDIR)
+
+
+def project_root() -> Path:
+    """Read the project root (the old ``core_config.BASE_DIR``) LAZILY."""
+    return Path(core_config.BASE_DIR)
 
 
 class WorkdirSource(StrEnum):
@@ -79,8 +80,12 @@ class WorkdirResolution:
     mismatch: bool
 
 
-class WorkdirStore(Protocol):
-    """Minimal port the resolver needs (``SessionStore`` satisfies it)."""
+class WorkdirSettingsReader(Protocol):
+    """Minimal read port the resolver needs (``SessionStore`` satisfies it).
+
+    Distinct from ``workdir_service.WorkdirStore``: this one is READ-ONLY
+    (chat settings + active session) while the service protocol also writes.
+    """
 
     async def get_chat_setting(
         self, conversation_id: ConversationKey, key: str, default: Any = None
@@ -96,7 +101,7 @@ class EffectiveWorkdir:
       1. ``settings["workdir"]`` (read RAW — never through a defaulted accessor,
          which would inject the env fallback and hide the other levels).
       2. The active bot session's bound OpenCode session ``directory``.
-      3. ``ENV_FALLBACK_WORKDIR`` (the env-derived default).
+      3. The env-derived default (``env_fallback_workdir()``).
 
     A relative or empty setting is ignored. Paths are normalized (``..``
     collapsed) and must be absolute.
@@ -104,7 +109,7 @@ class EffectiveWorkdir:
 
     def __init__(
         self,
-        store: WorkdirStore,
+        store: WorkdirSettingsReader,
         catalog: SessionCatalog,
         fallback: Path,
     ) -> None:

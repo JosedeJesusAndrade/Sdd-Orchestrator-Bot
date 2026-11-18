@@ -20,7 +20,8 @@ Design guarantees:
     ``home`` (injectable, defaults ``Path.home()``) so tests use ``tmp_path``.
   - **Typed failures, not exceptions**: every expected filesystem failure is
     RETURNED as a :class:`WorkdirFailure` (never raised, no localized copy).
-  - **Secure**: the perimeter is ``home``; paths are validated lexically
+  - **Secure**: the perimeter is ``home``; the path policy lives in
+    :class:`services.workdir_paths.PathGuard` — paths are validated lexically
     (``normpath`` + ``is_relative_to`` with ``normcase`` on Windows) AND then
     resolved (symlink escape check). No shell; subprocesses are argv-only;
     blocking filesystem work runs in ``asyncio.to_thread``.
@@ -39,11 +40,13 @@ import errno
 import os
 import shutil
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from services.effective_workdir import env_fallback_workdir
+from services.workdir_failures import WorkdirFailure as WorkdirFailure
+from services.workdir_failures import WorkdirFailureKind as WorkdirFailureKind
+from services.workdir_paths import PathGuard, same_path
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -113,35 +116,6 @@ class AmbiguousWorkdirError(WorkdirError):
 
 
 # ── v2 DTOs (typed failures + browse results) ──────────────────────────
-
-
-class WorkdirFailureKind(StrEnum):
-    """Every expected filesystem failure kind (WD-09)."""
-
-    NOT_FOUND = "not_found"
-    NOT_A_DIRECTORY = "not_a_directory"
-    PERMISSION_DENIED = "permission_denied"
-    OUTSIDE_ROOT = "outside_root"
-    SYMLINK_ESCAPE = "symlink_escape"
-    INVALID_NAME = "invalid_name"
-    CONFLICT = "conflict"
-    FORBIDDEN = "forbidden"
-    DIRECTORY_NOT_EMPTY = "directory_not_empty"
-    TARGET_EXISTS = "target_exists"
-    GIT_UNAVAILABLE = "git_unavailable"
-
-
-@dataclass(frozen=True)
-class WorkdirFailure:
-    """A typed, non-raising workdir failure.
-
-    ``detail`` is diagnostic (never localized/user-facing copy); the view maps
-    ``kind`` to its own strings.
-    """
-
-    kind: WorkdirFailureKind
-    path: Path
-    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -273,31 +247,6 @@ def _resolve(projects: Mapping[str, Path], query: str) -> ProjectEntry:
     return _entry_for(target)
 
 
-def _invalid_name(name: str) -> bool:
-    """A name must be a single, non-dot, non-empty segment (WD-04/WD-06)."""
-    if name in ("", ".", ".."):
-        return True
-    if not name.strip():
-        return True
-    if "/" in name or "\\" in name:
-        return True
-    return os.sep in name or (os.altsep is not None and os.altsep in name)
-
-
-def _same_path(left: Path, right: Path) -> bool:
-    """Compare paths case-insensitively on Windows, exactly on POSIX."""
-    return os.path.normcase(os.path.normpath(str(left))) == os.path.normcase(
-        os.path.normpath(str(right))
-    )
-
-
-def _within(child: Path, parent: Path) -> bool:
-    """True when ``child`` is ``parent`` or lies beneath it (normcased)."""
-    child_norm = Path(os.path.normcase(os.path.normpath(str(child))))
-    parent_norm = Path(os.path.normcase(os.path.normpath(str(parent))))
-    return child_norm == parent_norm or child_norm.is_relative_to(parent_norm)
-
-
 def _best_effort_rmdir(path: Path) -> None:
     """Remove an empty directory, ignoring failures (flag #4 cleanup)."""
     with contextlib.suppress(OSError):
@@ -328,6 +277,7 @@ class WorkdirService:
         self._root = env_fallback_workdir() if root is None else root
         # v2 perimeter: navigation above home is forbidden (WD-03/WD-08).
         self._home = Path.home() if home is None else Path(home)
+        self._guard = PathGuard(self._home)
 
     # ── Legacy ``/wdir`` ───────────────────────────────────────────────
 
@@ -417,14 +367,14 @@ class WorkdirService:
 
     async def ancestors(self, path: Path | str) -> tuple[Path, ...] | WorkdirFailure:
         """Return home → ``path`` inclusive, or a typed failure."""
-        validated = self._validate_dir(path)
+        validated = self._guard.resolve_within(path)
         if isinstance(validated, WorkdirFailure):
             return validated
         return self._chain(validated)
 
     async def list_dir(self, path: Path | str) -> DirectoryListing | WorkdirFailure:
         """List one directory (dirs+files, dirs first) inside home (WD-03)."""
-        validated = self._validate_dir(path)
+        validated = self._guard.resolve_within(path)
         if isinstance(validated, WorkdirFailure):
             return validated
         real = validated
@@ -434,7 +384,7 @@ class WorkdirService:
             return scan
 
         real_home = self._home.resolve()
-        parent = None if _same_path(real, real_home) else real.parent
+        parent = None if same_path(real, real_home) else real.parent
         return DirectoryListing(
             path=real,
             parent=parent,
@@ -454,14 +404,14 @@ class WorkdirService:
         init_git: bool = False,
     ) -> DirectoryEntry | WorkdirFailure:
         """Create a child directory, optionally ``git init``-ed (WD-04)."""
-        if _invalid_name(name):
+        if not self._guard.validate_name(name):
             return WorkdirFailure(
                 WorkdirFailureKind.INVALID_NAME,
                 Path(str(parent)) / name,
                 "name must be a single path segment",
             )
 
-        validated = self._validate_dir(parent)
+        validated = self._guard.resolve_within(parent)
         if isinstance(validated, WorkdirFailure):
             return validated
         target = validated / name
@@ -501,26 +451,26 @@ class WorkdirService:
 
     async def rename(self, path: Path | str, new_name: str) -> DirectoryEntry | WorkdirFailure:
         """Rename a directory's last segment only (WD-06)."""
-        lexical = self._lexical(path)
+        lexical = self._guard.normalize(path)
         if isinstance(lexical, WorkdirFailure):
             return lexical
 
-        if _invalid_name(new_name):
+        if not self._guard.validate_name(new_name):
             return WorkdirFailure(
                 WorkdirFailureKind.INVALID_NAME,
                 lexical.parent / new_name,
                 "name must be a single path segment",
             )
 
-        if self._is_forbidden(lexical):
+        if self._guard.is_forbidden(lexical):
             return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, lexical, "forbidden target")
 
-        validated = self._validate_dir(lexical)
+        validated = self._guard.resolve_within(lexical)
         if isinstance(validated, WorkdirFailure):
             return validated
         real = validated
 
-        if self._is_forbidden(real):
+        if self._guard.is_forbidden(real):
             return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, real, "forbidden target")
 
         target = real.parent / new_name
@@ -544,7 +494,7 @@ class WorkdirService:
 
     async def delete(self, path: Path | str) -> DirectoryEntry | WorkdirFailure:
         """Delete an EMPTY directory permanently; never follow a symlink (WD-07)."""
-        lexical = self._lexical(path)
+        lexical = self._guard.normalize(path)
         if isinstance(lexical, WorkdirFailure):
             return lexical
 
@@ -554,15 +504,15 @@ class WorkdirService:
                 WorkdirFailureKind.NOT_A_DIRECTORY, lexical, "symlink is not a directory"
             )
 
-        if self._is_forbidden(lexical):
+        if self._guard.is_forbidden(lexical):
             return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, lexical, "forbidden target")
 
-        validated = self._validate_dir(lexical)
+        validated = self._guard.resolve_within(lexical)
         if isinstance(validated, WorkdirFailure):
             return validated
         real = validated
 
-        if self._is_forbidden(real):
+        if self._guard.is_forbidden(real):
             return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, real, "forbidden target")
 
         try:
@@ -594,7 +544,7 @@ class WorkdirService:
         self, conversation_key: ConversationKey, path: Path | str
     ) -> DirectoryEntry | WorkdirFailure:
         """Validate ``path`` and persist it as the effective workdir (WD-05)."""
-        validated = self._validate_dir(path)
+        validated = self._guard.resolve_within(path)
         if isinstance(validated, WorkdirFailure):
             return validated
         real = validated
@@ -614,52 +564,12 @@ class WorkdirService:
         """The ONE writer of ``settings["workdir"]`` (flag #1: WD-02)."""
         await self._store.set_chat_setting(conversation_key, WORKDIR_SETTING, str(path))
 
-    def _lexical(self, path: Path | str) -> Path | WorkdirFailure:
-        """Normalize ``path`` to an absolute lexical path (no ``resolve``)."""
-        normalized = Path(os.path.normpath(str(path)))
-        if not normalized.is_absolute():
-            normalized = Path(os.path.abspath(str(path)))
-        if not normalized.is_absolute():
-            return WorkdirFailure(WorkdirFailureKind.OUTSIDE_ROOT, normalized, "relative path")
-        return normalized
-
-    def _validate_dir(self, path: Path | str) -> Path | WorkdirFailure:
-        """Validate an existing directory inside home; return its real path.
-
-        Security-first ordering (deliberate deviation from the design's literal
-        list, see the P3 report): lexical ``OUTSIDE_ROOT`` is checked before
-        existence so ``../../etc`` is always rejected even when it does not
-        exist on the host. Inside home the order is ``NOT_FOUND`` →
-        ``NOT_A_DIRECTORY`` → ``SYMLINK_ESCAPE``.
-        """
-        lexical = self._lexical(path)
-        if isinstance(lexical, WorkdirFailure):
-            return lexical
-
-        if not _within(lexical, self._home):
-            return WorkdirFailure(WorkdirFailureKind.OUTSIDE_ROOT, lexical, "outside home")
-
-        if not os.path.lexists(str(lexical)):
-            return WorkdirFailure(WorkdirFailureKind.NOT_FOUND, lexical, "does not exist")
-
-        try:
-            is_dir = lexical.is_dir()
-        except OSError:
-            is_dir = False
-        if not is_dir:
-            return WorkdirFailure(WorkdirFailureKind.NOT_A_DIRECTORY, lexical, "not a directory")
-
-        real = lexical.resolve()
-        if not _within(real, self._home.resolve()):
-            return WorkdirFailure(WorkdirFailureKind.SYMLINK_ESCAPE, real, "symlink escapes home")
-        return real
-
     def _chain(self, real: Path) -> tuple[Path, ...]:
         """Home → ``real`` inclusive, home first (WD-03)."""
         home = self._home.resolve()
         chain: list[Path] = [real]
         current = real
-        while not _same_path(current, home):
+        while not same_path(current, home):
             parent = current.parent
             if parent == current:
                 break
@@ -724,26 +634,3 @@ class WorkdirService:
         except OSError:
             return False
         return return_code == 0
-
-    def _is_forbidden(self, path: Path) -> bool:
-        """True for home, the filesystem root or a known system directory."""
-        normalized = Path(os.path.abspath(os.path.normpath(str(path))))
-        if _same_path(normalized, self._home):
-            return True
-        if normalized.parent == normalized:
-            return True
-        return any(_same_path(normalized, candidate) for candidate in self._system_dirs())
-
-    @staticmethod
-    def _system_dirs() -> tuple[Path, ...]:
-        """Platform system directories that destructive ops must never touch."""
-        candidates: list[Path] = []
-        for name in ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
-            raw = os.environ.get(name)
-            if raw:
-                candidates.append(Path(raw))
-        if os.name != "nt":
-            candidates.extend(
-                Path(entry) for entry in ("/bin", "/etc", "/usr", "/var", "/tmp", "/home", "/root")
-            )
-        return tuple(candidates)
