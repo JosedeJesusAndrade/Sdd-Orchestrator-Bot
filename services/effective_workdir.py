@@ -45,6 +45,19 @@ ENV_FALLBACK_WORKDIR: Path = Path(core_config.OPENCODE_WORKDIR)
 PROJECT_ROOT: Path = Path(core_config.BASE_DIR)
 
 
+def env_fallback_workdir() -> Path:
+    """Read the env-derived fallback LAZILY as a ``Path``.
+
+    The import-time :data:`ENV_FALLBACK_WORKDIR` constant is what composition
+    injects into :class:`EffectiveWorkdir`; this function exists for the legacy
+    ``WorkdirService(root=None)`` seam, whose characterization tests monkeypatch
+    ``core_config.OPENCODE_WORKDIR`` *after* import and then construct the service.
+    Keeping the token here preserves the P3 boundary gate: only this module may
+    reference it.
+    """
+    return Path(core_config.OPENCODE_WORKDIR)
+
+
 class WorkdirSource(StrEnum):
     """Where the resolved workdir came from (diagnostics for the UI)."""
 

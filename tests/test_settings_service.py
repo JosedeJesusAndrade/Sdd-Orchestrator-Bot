@@ -9,6 +9,7 @@ round-trip persistence check.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,6 +17,7 @@ import pytest
 
 from core_config import DEFAULT_MODEL, OPENCODE_TIMEOUT
 from services.effective_workdir import ENV_FALLBACK_WORKDIR
+from services.model_catalog import ModelCatalogSnapshot, ModelOption, OpenCodeModelCatalog
 from services.session_store import SessionStore
 from services.settings_service import (
     ChatSettings,
@@ -23,6 +25,7 @@ from services.settings_service import (
     SettingsService,
     UnknownSettingError,
 )
+from services.workdir_service import WorkdirService
 from tests.conversation_keys import conv
 
 
@@ -242,3 +245,146 @@ async def test_settings_round_trip_through_real_session_store(tmp_path: Path) ->
 
     persisted = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
     assert persisted["flet-user"]["settings"]["workdir"] == "C:/project"
+
+
+# ── SET-01: workdir delegates to WorkdirService.select ─────────────────
+
+
+def _home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    return home
+
+
+async def test_set_workdir_delegates_to_select(tmp_path: Path) -> None:
+    store = FakeStore()
+    home = _home(tmp_path)
+    project = home / "proj"
+    project.mkdir()
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    value = await service.set(conv(42), "workdir", str(project))
+
+    assert value == str(project.resolve())
+    assert store.set_calls == [(conv(42), "workdir", str(project.resolve()))]
+
+
+async def test_set_workdir_non_git_is_accepted(tmp_path: Path) -> None:
+    store = FakeStore()
+    home = _home(tmp_path)
+    plain = home / "plain"
+    plain.mkdir()
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    assert await service.set(conv(42), "workdir", str(plain)) == str(plain.resolve())
+
+
+async def test_set_workdir_outside_home_is_rejected(tmp_path: Path) -> None:
+    store = FakeStore()
+    home = _home(tmp_path)
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    with pytest.raises(InvalidSettingValueError):
+        await service.set(conv(42), "workdir", str(tmp_path / "elsewhere"))
+
+    assert store.set_calls == []
+
+
+async def test_set_workdir_missing_is_rejected(tmp_path: Path) -> None:
+    store = FakeStore()
+    home = _home(tmp_path)
+    service = SettingsService(
+        cast(SessionStore, store),
+        workdir_service=WorkdirService(cast(Any, store), home=home),
+    )
+
+    with pytest.raises(InvalidSettingValueError):
+        await service.set(conv(42), "workdir", str(home / "nope"))
+
+    assert store.set_calls == []
+
+
+# ── SET-01: provider validated against the catalog ─────────────────────
+
+
+class _FakeCatalog:
+    def __init__(self, snapshot: ModelCatalogSnapshot) -> None:
+        self._snapshot = snapshot
+
+    async def list(self, conversation_id: object) -> ModelCatalogSnapshot:
+        return self._snapshot
+
+
+def _snapshot(
+    *, options: tuple[ModelOption, ...], source: str, degraded: bool
+) -> ModelCatalogSnapshot:
+    return ModelCatalogSnapshot(
+        options=options,
+        groups=(),
+        source=source,
+        degraded=degraded,
+        fetched_at=datetime.now(UTC),
+    )
+
+
+def _provider_service(store: FakeStore, snapshot: ModelCatalogSnapshot) -> SettingsService:
+    return SettingsService(
+        cast(SessionStore, store),
+        model_catalog=cast(OpenCodeModelCatalog, _FakeCatalog(snapshot)),
+    )
+
+
+async def test_set_provider_known_is_accepted_and_persisted() -> None:
+    store = FakeStore()
+    snapshot = _snapshot(
+        options=(ModelOption(id="deepseek/deepseek-flash", provider="DeepSeek", label="Flash"),),
+        source="http",
+        degraded=False,
+    )
+    service = _provider_service(store, snapshot)
+
+    value = await service.set(conv(42), "provider", "deepseek")
+
+    assert value == "deepseek"
+    assert store.settings["provider"] == "deepseek"
+
+
+async def test_set_provider_unknown_is_rejected() -> None:
+    store = FakeStore()
+    snapshot = _snapshot(
+        options=(ModelOption(id="deepseek/deepseek-flash", provider="DeepSeek", label="Flash"),),
+        source="http",
+        degraded=False,
+    )
+    service = _provider_service(store, snapshot)
+
+    with pytest.raises(InvalidSettingValueError):
+        await service.set(conv(42), "provider", "nope")
+
+    assert store.set_calls == []
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        _snapshot(options=(), source="empty", degraded=True),
+        _snapshot(options=(), source="aliases", degraded=True),
+    ],
+)
+async def test_set_provider_degraded_catalog_accepts(
+    snapshot: ModelCatalogSnapshot,
+) -> None:
+    store = FakeStore()
+    service = _provider_service(store, snapshot)
+
+    assert await service.set(conv(42), "provider", "anything") == "anything"
+    assert store.settings["provider"] == "anything"

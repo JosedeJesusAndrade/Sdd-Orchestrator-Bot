@@ -1,32 +1,49 @@
-"""WorkdirService: project discovery and switching, frontend-agnostic.
+"""WorkdirService: project discovery, switching and filesystem CRUD.
 
 Extracted from ``handlers/ci.py::wdir_command`` (core-isolation item 6). This
-module owns the ``/wdir`` business logic: discovering project folders (a
-``.git`` directory OR file), generating aliases, resolving exact / partial /
-ambiguous queries, reading the current-workdir marker, and persisting the
-``workdir`` chat setting.
+module owns the ``/wdir`` business logic **and** the v2 explorer's browse +
+CRUD surface (``flet-data-layer`` phase P3):
+
+Legacy (kept, behaviorally identical — the Telegram characterization pins it):
+  - ``list`` / ``switch`` / ``current``; ``.git``-only listing of the legacy
+    root, alias/partial/ambiguous query resolution, ``is_current`` marker.
+
+v2 (browse + CRUD + security):
+  - ``roots`` / ``ancestors`` / ``list_dir``;
+  - ``create_child`` (optional ``git init``) / ``rename`` / ``delete`` /
+    ``select`` (the only writer of ``settings["workdir"]``).
 
 Design guarantees:
   - **PTB-free**: ``services/`` never imports a frontend. No UI copy lives here;
-    the handler maps the DTOs/errors to human strings (the view).
-  - **Cross-platform**: ``pathlib`` only, no ``os.path`` Windows-isms. Errors
-    such as ``PermissionError`` are handled the same way on Linux and Windows.
-  - **Injectable**: the root defaults to ``core_config.OPENCODE_WORKDIR`` and
-    the store is injected, so tests use ``tmp_path`` with no global patching.
+    the view maps the DTOs/failures to human strings.
+  - **Injectable**: the legacy ``root=`` seam stays for ``/wdir``; v2 browses
+    ``home`` (injectable, defaults ``Path.home()``) so tests use ``tmp_path``.
+  - **Typed failures, not exceptions**: every expected filesystem failure is
+    RETURNED as a :class:`WorkdirFailure` (never raised, no localized copy).
+  - **Secure**: the perimeter is ``home``; paths are validated lexically
+    (``normpath`` + ``is_relative_to`` with ``normcase`` on Windows) AND then
+    resolved (symlink escape check). No shell; subprocesses are argv-only;
+    blocking filesystem work runs in ``asyncio.to_thread``.
 
 Case sensitivity: the alias/query lookup stays case-insensitive on every
-platform (the original lowercases the key before matching). The *current-workdir
-marker* deliberately compares ``str(entry) == str(current)`` and therefore stays
-exact/case-sensitive — this pins the Phase 0 characterization behavior.
+platform. The legacy *current-workdir marker* deliberately compares
+``str(entry) == str(current)`` and therefore stays exact/case-sensitive — this
+pins the Phase 0 characterization behavior.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import errno
+import os
+import shutil
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-import core_config
+from services.effective_workdir import env_fallback_workdir
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -56,7 +73,7 @@ class WorkdirStore(Protocol):
     ) -> None: ...
 
 
-# ── Domain errors ──────────────────────────────────────────────────────
+# ── Domain errors (legacy ``/wdir``) ───────────────────────────────────
 
 
 class WorkdirError(Exception):
@@ -95,7 +112,71 @@ class AmbiguousWorkdirError(WorkdirError):
         super().__init__(f"Ambiguous workdir query: {', '.join(candidates)}")
 
 
-# ── DTOs ───────────────────────────────────────────────────────────────
+# ── v2 DTOs (typed failures + browse results) ──────────────────────────
+
+
+class WorkdirFailureKind(StrEnum):
+    """Every expected filesystem failure kind (WD-09)."""
+
+    NOT_FOUND = "not_found"
+    NOT_A_DIRECTORY = "not_a_directory"
+    PERMISSION_DENIED = "permission_denied"
+    OUTSIDE_ROOT = "outside_root"
+    SYMLINK_ESCAPE = "symlink_escape"
+    INVALID_NAME = "invalid_name"
+    CONFLICT = "conflict"
+    FORBIDDEN = "forbidden"
+    DIRECTORY_NOT_EMPTY = "directory_not_empty"
+    TARGET_EXISTS = "target_exists"
+    GIT_UNAVAILABLE = "git_unavailable"
+
+
+@dataclass(frozen=True)
+class WorkdirFailure:
+    """A typed, non-raising workdir failure.
+
+    ``detail`` is diagnostic (never localized/user-facing copy); the view maps
+    ``kind`` to its own strings.
+    """
+
+    kind: WorkdirFailureKind
+    path: Path
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class DirectoryEntry:
+    """One immediate child of a listed directory."""
+
+    name: str
+    path: Path
+    is_dir: bool
+    is_git: bool
+    is_symlink: bool
+
+
+@dataclass(frozen=True)
+class DirectoryListing:
+    """One directory observation for the explorer."""
+
+    path: Path
+    parent: Path | None
+    entries: tuple[DirectoryEntry, ...]
+    ancestors: tuple[Path, ...]
+    is_git: bool
+    is_writable: bool
+
+
+@dataclass(frozen=True)
+class _Scan:
+    """Internal: the result of one ``iterdir`` scan (runs in a thread)."""
+
+    entries: tuple[DirectoryEntry, ...]
+    is_git: bool
+    is_writable: bool
+
+
+# ── Legacy DTOs ────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -192,17 +273,63 @@ def _resolve(projects: Mapping[str, Path], query: str) -> ProjectEntry:
     return _entry_for(target)
 
 
+def _invalid_name(name: str) -> bool:
+    """A name must be a single, non-dot, non-empty segment (WD-04/WD-06)."""
+    if name in ("", ".", ".."):
+        return True
+    if not name.strip():
+        return True
+    if "/" in name or "\\" in name:
+        return True
+    return os.sep in name or (os.altsep is not None and os.altsep in name)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    """Compare paths case-insensitively on Windows, exactly on POSIX."""
+    return os.path.normcase(os.path.normpath(str(left))) == os.path.normcase(
+        os.path.normpath(str(right))
+    )
+
+
+def _within(child: Path, parent: Path) -> bool:
+    """True when ``child`` is ``parent`` or lies beneath it (normcased)."""
+    child_norm = Path(os.path.normcase(os.path.normpath(str(child))))
+    parent_norm = Path(os.path.normcase(os.path.normpath(str(parent))))
+    return child_norm == parent_norm or child_norm.is_relative_to(parent_norm)
+
+
+def _best_effort_rmdir(path: Path) -> None:
+    """Remove an empty directory, ignoring failures (flag #4 cleanup)."""
+    with contextlib.suppress(OSError):
+        path.rmdir()
+
+
+def _is_empty(path: Path) -> bool:
+    with os.scandir(path) as entries:
+        return next(entries, None) is None
+
+
 # ── Service ────────────────────────────────────────────────────────────
 
 
 class WorkdirService:
-    """Discover and switch OpenCode project folders for a conversation."""
+    """Discover/switch project folders (legacy) and browse/CRUD (v2)."""
 
-    def __init__(self, store: WorkdirStore, *, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        store: WorkdirStore,
+        *,
+        root: Path | None = None,
+        home: Path | None = None,
+    ) -> None:
         self._store = store
-        # Read the module attribute lazily so patching ``core_config`` (as the
-        # characterization tests do) is honored by direct construction.
-        self._root = Path(core_config.OPENCODE_WORKDIR) if root is None else root
+        # Legacy ``/wdir`` root. Read lazily so the characterization tests that
+        # monkeypatch ``core_config`` (via the facade) are honored.
+        self._root = env_fallback_workdir() if root is None else root
+        # v2 perimeter: navigation above home is forbidden (WD-03/WD-08).
+        self._home = Path.home() if home is None else Path(home)
+
+    # ── Legacy ``/wdir`` ───────────────────────────────────────────────
 
     async def list(self, conversation_key: ConversationKey) -> ProjectsSnapshot:
         """List projects, marking the current one (exact ``str()`` match)."""
@@ -250,7 +377,7 @@ class WorkdirService:
         except WorkdirError as error:
             return ResolveResult(query=normalized, error=error)
 
-        await self._store.set_chat_setting(conversation_key, WORKDIR_SETTING, str(entry.path))
+        await self._persist_workdir(conversation_key, entry.path)
         return ResolveResult(query=normalized, entry=entry)
 
     async def current(self, conversation_key: ConversationKey) -> Path:
@@ -281,3 +408,342 @@ class WorkdirService:
             raise WorkdirPermissionDeniedError() from error
 
         return _Discovery(projects=projects, entries=tuple(entries))
+
+    # ── v2 browse ──────────────────────────────────────────────────────
+
+    def roots(self) -> tuple[Path, ...]:
+        """The explorer's single root: home (WD-03)."""
+        return (self._home,)
+
+    async def ancestors(self, path: Path | str) -> tuple[Path, ...] | WorkdirFailure:
+        """Return home → ``path`` inclusive, or a typed failure."""
+        validated = self._validate_dir(path)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        return self._chain(validated)
+
+    async def list_dir(self, path: Path | str) -> DirectoryListing | WorkdirFailure:
+        """List one directory (dirs+files, dirs first) inside home (WD-03)."""
+        validated = self._validate_dir(path)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        real = validated
+
+        scan = await asyncio.to_thread(self._scan, real)
+        if isinstance(scan, WorkdirFailure):
+            return scan
+
+        real_home = self._home.resolve()
+        parent = None if _same_path(real, real_home) else real.parent
+        return DirectoryListing(
+            path=real,
+            parent=parent,
+            entries=scan.entries,
+            ancestors=self._chain(real),
+            is_git=scan.is_git,
+            is_writable=scan.is_writable,
+        )
+
+    # ── v2 CRUD ────────────────────────────────────────────────────────
+
+    async def create_child(
+        self,
+        parent: Path | str,
+        name: str,
+        *,
+        init_git: bool = False,
+    ) -> DirectoryEntry | WorkdirFailure:
+        """Create a child directory, optionally ``git init``-ed (WD-04)."""
+        if _invalid_name(name):
+            return WorkdirFailure(
+                WorkdirFailureKind.INVALID_NAME,
+                Path(str(parent)) / name,
+                "name must be a single path segment",
+            )
+
+        validated = self._validate_dir(parent)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        target = validated / name
+
+        if os.path.lexists(str(target)):
+            return WorkdirFailure(WorkdirFailureKind.TARGET_EXISTS, target, "already exists")
+
+        # ``git`` opt-in only: precheck BEFORE creating so a missing binary
+        # leaves no empty directory behind (WD-04).
+        if init_git and shutil.which("git") is None:
+            return WorkdirFailure(
+                WorkdirFailureKind.GIT_UNAVAILABLE, target, "git is not installed"
+            )
+
+        try:
+            await asyncio.to_thread(target.mkdir)
+        except FileExistsError:
+            return WorkdirFailure(WorkdirFailureKind.TARGET_EXISTS, target, "already exists")
+        except PermissionError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, target, str(error))
+        except OSError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, target, str(error))
+
+        if init_git and not await self._git_init(target):
+            # Flag #4: ``git init`` failed after the dir exists → best-effort
+            # remove the empty directory and report git unavailable.
+            await asyncio.to_thread(_best_effort_rmdir, target)
+            return WorkdirFailure(WorkdirFailureKind.GIT_UNAVAILABLE, target, "git init failed")
+
+        return DirectoryEntry(
+            name=name,
+            path=target,
+            is_dir=True,
+            is_git=init_git and (target / ".git").exists(),
+            is_symlink=False,
+        )
+
+    async def rename(self, path: Path | str, new_name: str) -> DirectoryEntry | WorkdirFailure:
+        """Rename a directory's last segment only (WD-06)."""
+        lexical = self._lexical(path)
+        if isinstance(lexical, WorkdirFailure):
+            return lexical
+
+        if _invalid_name(new_name):
+            return WorkdirFailure(
+                WorkdirFailureKind.INVALID_NAME,
+                lexical.parent / new_name,
+                "name must be a single path segment",
+            )
+
+        if self._is_forbidden(lexical):
+            return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, lexical, "forbidden target")
+
+        validated = self._validate_dir(lexical)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        real = validated
+
+        if self._is_forbidden(real):
+            return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, real, "forbidden target")
+
+        target = real.parent / new_name
+        if os.path.lexists(str(target)):
+            return WorkdirFailure(WorkdirFailureKind.TARGET_EXISTS, target, "already exists")
+
+        try:
+            await asyncio.to_thread(real.rename, target)
+        except PermissionError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+        except OSError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+
+        return DirectoryEntry(
+            name=new_name,
+            path=target,
+            is_dir=True,
+            is_git=(target / ".git").exists(),
+            is_symlink=False,
+        )
+
+    async def delete(self, path: Path | str) -> DirectoryEntry | WorkdirFailure:
+        """Delete an EMPTY directory permanently; never follow a symlink (WD-07)."""
+        lexical = self._lexical(path)
+        if isinstance(lexical, WorkdirFailure):
+            return lexical
+
+        # A symlink argument is never followed: the target stays untouched.
+        if lexical.is_symlink():
+            return WorkdirFailure(
+                WorkdirFailureKind.NOT_A_DIRECTORY, lexical, "symlink is not a directory"
+            )
+
+        if self._is_forbidden(lexical):
+            return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, lexical, "forbidden target")
+
+        validated = self._validate_dir(lexical)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        real = validated
+
+        if self._is_forbidden(real):
+            return WorkdirFailure(WorkdirFailureKind.FORBIDDEN, real, "forbidden target")
+
+        try:
+            empty = await asyncio.to_thread(_is_empty, real)
+        except PermissionError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+        except OSError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+
+        if not empty:
+            return WorkdirFailure(
+                WorkdirFailureKind.DIRECTORY_NOT_EMPTY, real, "directory is not empty"
+            )
+
+        try:
+            await asyncio.to_thread(real.rmdir)
+        except PermissionError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+        except OSError as error:
+            if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                return WorkdirFailure(WorkdirFailureKind.DIRECTORY_NOT_EMPTY, real, str(error))
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+
+        return DirectoryEntry(
+            name=real.name, path=real, is_dir=True, is_git=False, is_symlink=False
+        )
+
+    async def select(
+        self, conversation_key: ConversationKey, path: Path | str
+    ) -> DirectoryEntry | WorkdirFailure:
+        """Validate ``path`` and persist it as the effective workdir (WD-05)."""
+        validated = self._validate_dir(path)
+        if isinstance(validated, WorkdirFailure):
+            return validated
+        real = validated
+
+        await self._persist_workdir(conversation_key, real)
+        return DirectoryEntry(
+            name=real.name,
+            path=real,
+            is_dir=True,
+            is_git=(real / ".git").exists(),
+            is_symlink=False,
+        )
+
+    # ── Single writer + validation internals ───────────────────────────
+
+    async def _persist_workdir(self, conversation_key: ConversationKey, path: Path) -> None:
+        """The ONE writer of ``settings["workdir"]`` (flag #1: WD-02)."""
+        await self._store.set_chat_setting(conversation_key, WORKDIR_SETTING, str(path))
+
+    def _lexical(self, path: Path | str) -> Path | WorkdirFailure:
+        """Normalize ``path`` to an absolute lexical path (no ``resolve``)."""
+        normalized = Path(os.path.normpath(str(path)))
+        if not normalized.is_absolute():
+            normalized = Path(os.path.abspath(str(path)))
+        if not normalized.is_absolute():
+            return WorkdirFailure(WorkdirFailureKind.OUTSIDE_ROOT, normalized, "relative path")
+        return normalized
+
+    def _validate_dir(self, path: Path | str) -> Path | WorkdirFailure:
+        """Validate an existing directory inside home; return its real path.
+
+        Security-first ordering (deliberate deviation from the design's literal
+        list, see the P3 report): lexical ``OUTSIDE_ROOT`` is checked before
+        existence so ``../../etc`` is always rejected even when it does not
+        exist on the host. Inside home the order is ``NOT_FOUND`` →
+        ``NOT_A_DIRECTORY`` → ``SYMLINK_ESCAPE``.
+        """
+        lexical = self._lexical(path)
+        if isinstance(lexical, WorkdirFailure):
+            return lexical
+
+        if not _within(lexical, self._home):
+            return WorkdirFailure(WorkdirFailureKind.OUTSIDE_ROOT, lexical, "outside home")
+
+        if not os.path.lexists(str(lexical)):
+            return WorkdirFailure(WorkdirFailureKind.NOT_FOUND, lexical, "does not exist")
+
+        try:
+            is_dir = lexical.is_dir()
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            return WorkdirFailure(WorkdirFailureKind.NOT_A_DIRECTORY, lexical, "not a directory")
+
+        real = lexical.resolve()
+        if not _within(real, self._home.resolve()):
+            return WorkdirFailure(WorkdirFailureKind.SYMLINK_ESCAPE, real, "symlink escapes home")
+        return real
+
+    def _chain(self, real: Path) -> tuple[Path, ...]:
+        """Home → ``real`` inclusive, home first (WD-03)."""
+        home = self._home.resolve()
+        chain: list[Path] = [real]
+        current = real
+        while not _same_path(current, home):
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+            chain.append(current)
+        chain.reverse()
+        return tuple(chain)
+
+    def _scan(self, real: Path) -> _Scan | WorkdirFailure:
+        """Blocking listing work executed via ``asyncio.to_thread``."""
+        try:
+            children = list(real.iterdir())
+        except PermissionError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+        except OSError as error:
+            return WorkdirFailure(WorkdirFailureKind.PERMISSION_DENIED, real, str(error))
+
+        entries: list[DirectoryEntry] = []
+        for child in children:
+            is_symlink = child.is_symlink()
+            try:
+                is_dir = child.is_dir()
+            except OSError:
+                is_dir = False
+            is_git = False
+            if is_dir:
+                try:
+                    is_git = (child / ".git").exists()
+                except OSError:
+                    is_git = False
+            entries.append(
+                DirectoryEntry(
+                    name=child.name,
+                    path=child,
+                    is_dir=is_dir,
+                    is_git=is_git,
+                    is_symlink=is_symlink,
+                )
+            )
+
+        entries.sort(key=lambda entry: (not entry.is_dir, entry.name.casefold(), entry.name))
+        return _Scan(
+            entries=tuple(entries),
+            is_git=(real / ".git").exists(),
+            is_writable=os.access(str(real), os.W_OK),
+        )
+
+    async def _git_init(self, target: Path) -> bool:
+        """Run ``git init`` (argv only, no shell); return success."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "init",
+                str(target),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            return False
+        try:
+            return_code = await process.wait()
+        except OSError:
+            return False
+        return return_code == 0
+
+    def _is_forbidden(self, path: Path) -> bool:
+        """True for home, the filesystem root or a known system directory."""
+        normalized = Path(os.path.abspath(os.path.normpath(str(path))))
+        if _same_path(normalized, self._home):
+            return True
+        if normalized.parent == normalized:
+            return True
+        return any(_same_path(normalized, candidate) for candidate in self._system_dirs())
+
+    @staticmethod
+    def _system_dirs() -> tuple[Path, ...]:
+        """Platform system directories that destructive ops must never touch."""
+        candidates: list[Path] = []
+        for name in ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+            raw = os.environ.get(name)
+            if raw:
+                candidates.append(Path(raw))
+        if os.name != "nt":
+            candidates.extend(
+                Path(entry) for entry in ("/bin", "/etc", "/usr", "/var", "/tmp", "/home", "/root")
+            )
+        return tuple(candidates)

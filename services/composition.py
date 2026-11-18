@@ -237,6 +237,7 @@ def build_prompt_stack(
         AliasModelsSource(),
     ]
     model_catalog = OpenCodeModelCatalog(model_sources, session_store)
+    workdir_service = WorkdirService(session_store, root=Path(workdir))
 
     return CoreStack(
         session_store=session_store,
@@ -250,8 +251,12 @@ def build_prompt_stack(
         ),
         health_service=HealthService(session_store, resolved_start_time),
         session_service=session_service,
-        settings_service=SettingsService(session_store),
-        workdir_service=WorkdirService(session_store, root=Path(workdir)),
+        settings_service=SettingsService(
+            session_store,
+            workdir_service=workdir_service,
+            model_catalog=model_catalog,
+        ),
+        workdir_service=workdir_service,
         pull_request_service=PullRequestService(session_store, git=git_runner, gh=gh_runner),
         transcription_service=TranscriptionService(
             WhisperTranscriber(OPENAI_API_KEY), enabled=bool(OPENAI_API_KEY)
