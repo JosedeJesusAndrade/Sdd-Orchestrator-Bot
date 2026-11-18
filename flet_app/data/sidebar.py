@@ -18,14 +18,12 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol
 
 from flet_app.data.state import (
+    Loadable,
     LoadEmpty,
     LoadError,
-    LoadIdle,
-    LoadLoading,
     LoadReady,
     LoadState,
     SidebarFailure,
-    failure_from,
 )
 from services.conversation import ConversationKey
 
@@ -97,7 +95,17 @@ class SidebarSnapshot:
 # ── Controller ─────────────────────────────────────────────────────────
 
 
-class SidebarController:
+@dataclass(frozen=True)
+class _SidebarData:
+    """The raw services' payload a successful load folds into a snapshot."""
+
+    sessions: list[ConversationSummary]
+    active: SessionInfo | None
+    workdir: WorkdirResolution
+    model: str
+
+
+class SidebarController(Loadable[None]):
     """Drive the sidebar's data; never renders and never imports widgets."""
 
     def __init__(
@@ -111,6 +119,7 @@ class SidebarController:
         expanded: bool = True,
         profile_name: str | None = None,
     ) -> None:
+        super().__init__()
         self._conversations = conversations
         self._session_writer = session_writer
         self._workdir = workdir
@@ -122,7 +131,7 @@ class SidebarController:
             active_real_id=None,
             workdir="",
             model="",
-            state=LoadIdle[None](),
+            state=self._state,
             error=None,
             profile_name=default_profile_name() if profile_name is None else profile_name,
         )
@@ -132,28 +141,32 @@ class SidebarController:
         """The cached snapshot (the sidebar's current data)."""
         return self._snapshot
 
+    def _publish(self, state: LoadState[None]) -> None:
+        """Cache the state inside the snapshot (the sidebar's single source)."""
+        self._state = state
+        error: SidebarFailure | None = state.failure if isinstance(state, LoadError) else None
+        self._snapshot = replace(self._snapshot, state=state, error=error)
+
+    async def _fetch(self) -> tuple[_SidebarData, LoadState[None]]:
+        sessions = await self._conversations.list_conversations(self._key)
+        active = await self._session_state.get_active_session(self._key)
+        resolved = await self._workdir.resolve(self._key)
+        model = await self._session_state.get_model(self._key)
+        data = _SidebarData(sessions=sessions, active=active, workdir=resolved, model=model)
+        state: LoadState[None] = LoadEmpty[None]() if not sessions else LoadReady[None](None)
+        return data, state
+
     async def load(self) -> SidebarSnapshot:
         """Read conversations, active real id, workdir and model (FD-04)."""
-        self._snapshot = replace(self._snapshot, state=LoadLoading[None](), error=None)
-        try:
-            sessions = await self._conversations.list_conversations(self._key)
-            active = await self._session_state.get_active_session(self._key)
-            resolved = await self._workdir.resolve(self._key)
-            model = await self._session_state.get_model(self._key)
-        except Exception as exc:
-            return self._fail(exc)
-
-        state: LoadState[None] = LoadEmpty[None]() if not sessions else LoadReady[None](None)
-        self._snapshot = SidebarSnapshot(
-            expanded=self._snapshot.expanded,
-            sessions=tuple(sessions),
-            active_real_id=active.real_id if active is not None else None,
-            workdir=str(resolved.path),
-            model=model,
-            state=state,
-            error=None,
-            profile_name=self._snapshot.profile_name,
-        )
+        data, _ = await self._load(self._fetch)
+        if data is not None:
+            self._snapshot = replace(
+                self._snapshot,
+                sessions=tuple(data.sessions),
+                active_real_id=data.active.real_id if data.active is not None else None,
+                workdir=str(data.workdir.path),
+                model=data.model,
+            )
         return self._snapshot
 
     async def select(self, real_id: str) -> SidebarSnapshot:
@@ -165,7 +178,8 @@ class SidebarController:
         try:
             await self._conversations.open(self._key, real_id, title)
         except Exception as exc:
-            return self._fail(exc)
+            self._fail(exc)
+            return self._snapshot
         return await self.load()
 
     async def new_chat(self) -> SidebarSnapshot:
@@ -173,7 +187,8 @@ class SidebarController:
         try:
             await self._session_writer.new_chat(self._key)
         except Exception as exc:
-            return self._fail(exc)
+            self._fail(exc)
+            return self._snapshot
         return await self.load()
 
     def toggle(self) -> SidebarSnapshot:
@@ -182,13 +197,4 @@ class SidebarController:
         Not a coroutine, never touches a service, never awaits.
         """
         self._snapshot = replace(self._snapshot, expanded=not self._snapshot.expanded)
-        return self._snapshot
-
-    def _fail(self, exc: BaseException) -> SidebarSnapshot:
-        failure = failure_from(exc)
-        self._snapshot = replace(
-            self._snapshot,
-            state=LoadError[None](failure=failure),
-            error=failure,
-        )
         return self._snapshot

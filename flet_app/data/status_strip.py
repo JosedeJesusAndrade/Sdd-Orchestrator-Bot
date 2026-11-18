@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from flet_app.data.state import (
-    LoadError,
-    LoadIdle,
-    LoadLoading,
-    LoadReady,
-    LoadState,
-    failure_from,
-)
+from flet_app.data.state import Loadable, LoadReady, LoadState
 from services.conversation import ConversationKey
 from services.status_service import StatusSnapshot
 
@@ -27,26 +20,19 @@ class StatusPort(Protocol):
     async def snapshot(self, key: ConversationKey) -> StatusSnapshot: ...
 
 
-class StatusStripController:
+class StatusStripController(Loadable[StatusSnapshot]):
     """Compute the status strip's data on demand (no background work)."""
 
     def __init__(self, status: StatusPort, key: ConversationKey) -> None:
+        super().__init__()
         self._status = status
         self._key = key
-        self._state: LoadState[StatusSnapshot] = LoadIdle[StatusSnapshot]()
 
-    @property
-    def state(self) -> LoadState[StatusSnapshot]:
-        """The last load state (starts ``idle``; no polling is scheduled)."""
-        return self._state
+    async def _fetch(self) -> tuple[StatusSnapshot, LoadState[StatusSnapshot]]:
+        snapshot = await self._status.snapshot(self._key)
+        return snapshot, LoadReady[StatusSnapshot](snapshot)
 
     async def load(self) -> StatusSnapshot | None:
         """Return the current snapshot, or ``None`` when the load failed."""
-        self._state = LoadLoading[StatusSnapshot]()
-        try:
-            snapshot = await self._status.snapshot(self._key)
-        except Exception as exc:
-            self._state = LoadError[StatusSnapshot](failure=failure_from(exc))
-            return None
-        self._state = LoadReady[StatusSnapshot](snapshot)
+        snapshot, _ = await self._load(self._fetch)
         return snapshot

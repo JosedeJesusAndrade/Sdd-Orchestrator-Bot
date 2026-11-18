@@ -22,6 +22,7 @@ from flet_app.data.sidebar import (
     SidebarSnapshot,
 )
 from flet_app.data.state import (
+    Loadable,
     LoadEmpty,
     LoadError,
     LoadIdle,
@@ -162,6 +163,28 @@ def _controller(
         expanded=expanded,
         profile_name=profile_name,
     )
+
+
+# ── Loadable mixin / typed failure ─────────────────────────────────────
+
+
+def test_load_controllers_share_the_loadable_mixin() -> None:
+    assert issubclass(SidebarController, Loadable)
+    assert issubclass(StatusStripController, Loadable)
+    assert issubclass(ModelSelectorController, Loadable)
+
+
+def test_explorer_deliberately_skips_the_loadable_mixin() -> None:
+    assert not issubclass(ExplorerController, Loadable)
+
+
+def test_load_error_carries_a_typed_failure() -> None:
+    failure = SidebarFailure(kind="unexpected", detail="boom")
+
+    error = LoadError[None](failure=failure)
+
+    assert error.failure is failure
+    assert error.failure.kind == "unexpected"
 
 
 # ── SidebarSnapshot shape ──────────────────────────────────────────────

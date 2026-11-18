@@ -43,7 +43,15 @@ class WorkdirExplorerPort(Protocol):
 
 
 class ExplorerController:
-    """Drive directory browsing and CRUD without widgets."""
+    """Drive directory browsing and CRUD without widgets.
+
+    Deliberately does NOT use :class:`~flet_app.data.state.Loadable`: its
+    operations are discrete mutations that already return a typed
+    ``WorkdirFailure`` (which the view renders inline), not a single
+    ``idle -> loading -> ready|empty|error`` load cycle. The asymmetry is a
+    design decision, not an oversight — the explorer never wraps results in a
+    ``LoadState``.
+    """
 
     def __init__(self, workdir: WorkdirExplorerPort, key: ConversationKey) -> None:
         self._workdir = workdir

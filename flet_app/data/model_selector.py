@@ -12,15 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from flet_app.data.state import (
-    LoadEmpty,
-    LoadError,
-    LoadIdle,
-    LoadLoading,
-    LoadReady,
-    LoadState,
-    failure_from,
-)
+from flet_app.data.state import Loadable, LoadEmpty, LoadReady, LoadState
 from services.conversation import ConversationKey
 from services.model_catalog import ModelCatalogSnapshot
 
@@ -37,7 +29,7 @@ class ModelPreferencePort(Protocol):
     async def set_model(self, key: ConversationKey, model: str) -> None: ...
 
 
-class ModelSelectorController:
+class ModelSelectorController(Loadable[ModelCatalogSnapshot]):
     """Load and persist the model selector's data."""
 
     def __init__(
@@ -46,30 +38,26 @@ class ModelSelectorController:
         preferences: ModelPreferencePort,
         key: ConversationKey,
     ) -> None:
+        super().__init__()
         self._catalog = catalog
         self._preferences = preferences
         self._key = key
-        self._state: LoadState[ModelCatalogSnapshot] = LoadIdle[ModelCatalogSnapshot]()
 
-    @property
-    def state(self) -> LoadState[ModelCatalogSnapshot]:
-        """The last load state (``empty`` when the catalog yielded no options)."""
-        return self._state
-
-    async def load(self, key: ConversationKey | None = None) -> ModelCatalogSnapshot | None:
-        """Return the grouped catalog for ``key`` (defaults to the held key)."""
-        target = self._key if key is None else key
-        self._state = LoadLoading[ModelCatalogSnapshot]()
-        try:
-            snapshot = await self._catalog.list(target)
-        except Exception as exc:
-            self._state = LoadError[ModelCatalogSnapshot](failure=failure_from(exc))
-            return None
-        self._state = (
+    async def _fetch(
+        self, target: ConversationKey
+    ) -> tuple[ModelCatalogSnapshot, LoadState[ModelCatalogSnapshot]]:
+        snapshot = await self._catalog.list(target)
+        state: LoadState[ModelCatalogSnapshot] = (
             LoadEmpty[ModelCatalogSnapshot]()
             if not snapshot.options
             else LoadReady[ModelCatalogSnapshot](snapshot)
         )
+        return snapshot, state
+
+    async def load(self, key: ConversationKey | None = None) -> ModelCatalogSnapshot | None:
+        """Return the grouped catalog for ``key`` (defaults to the held key)."""
+        target = self._key if key is None else key
+        snapshot, _ = await self._load(lambda: self._fetch(target))
         return snapshot
 
     async def select(
@@ -80,6 +68,6 @@ class ModelSelectorController:
         try:
             await self._preferences.set_model(target, model_id)
         except Exception as exc:
-            self._state = LoadError[ModelCatalogSnapshot](failure=failure_from(exc))
+            self._fail(exc)
             return None
         return await self.load(target)
