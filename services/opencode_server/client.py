@@ -153,6 +153,20 @@ class OpenCodeServerClient:
             messages.append(cast(dict[str, Any], item))
         return messages
 
+    async def list_providers(
+        self,
+        *,
+        directory: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Return the provider catalog (``GET /config/providers``).
+
+        The payload is ``{"providers": [{id, name, source, models: {...}}],
+        "default": {providerID: modelID}}``. Parsing/filtering lives in
+        ``services.model_catalog`` so this stays a thin transport wrapper.
+        """
+        response = await self._get("/config/providers", directory=directory)
+        return self._json_object(response)
+
     async def list_permissions(
         self,
         *,

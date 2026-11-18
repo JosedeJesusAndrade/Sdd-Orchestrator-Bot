@@ -39,6 +39,14 @@ from services.effective_workdir import (
     EffectiveWorkdir,
 )
 from services.health_service import HealthService
+from services.model_catalog import (
+    AliasModelsSource,
+    CliModelsSource,
+    HttpProvidersSource,
+    ModelSource,
+    OpenCodeModelCatalog,
+    SkipSource,
+)
 from services.opencode_cli_backend import OpenCodeCLIBackend
 from services.opencode_server import (
     OpenCodeServerClient,
@@ -79,6 +87,7 @@ class CoreStack:
     transcription_service: TranscriptionService
     agent_sessions: AgentSessions
     conversations_service: ConversationsService
+    model_catalog: OpenCodeModelCatalog
     start_time: float
     backend: str = OPENCODE_BACKEND
     permission_timeout: int = OPENCODE_PERMISSION_TIMEOUT
@@ -219,6 +228,16 @@ def build_prompt_stack(
 
     git_runner, gh_runner = default_runners()
 
+    # Model catalog fallback chain: HTTP (complete) -> CLI (slow) -> aliases
+    # (static) -> empty. ``SkipSource`` keeps the HTTP slot when there is no
+    # server client (``OPENCODE_BACKEND=cli``).
+    model_sources: list[ModelSource] = [
+        HttpProvidersSource(client) if client is not None else SkipSource(),
+        CliModelsSource(opencode_cmd),
+        AliasModelsSource(),
+    ]
+    model_catalog = OpenCodeModelCatalog(model_sources, session_store)
+
     return CoreStack(
         session_store=session_store,
         effective_workdir=effective_workdir,
@@ -239,6 +258,7 @@ def build_prompt_stack(
         ),
         agent_sessions=agent_sessions,
         conversations_service=conversations_service,
+        model_catalog=model_catalog,
         start_time=resolved_start_time,
         backend=selected_backend,
         permission_timeout=permission_timeout,

@@ -25,6 +25,7 @@ from services.ai_provider_factory import AIProviderFactory
 from services.composition import CoreStack, build_prompt_stack
 from services.conversations_service import ConversationsService
 from services.effective_workdir import EffectiveWorkdir
+from services.model_catalog import OpenCodeModelCatalog
 from services.opencode_cli_backend import OpenCodeCLIBackend
 from services.opencode_server import OpenCodeServerClient, OpenCodeServerManager
 from services.opencode_server_backend import OpenCodeServerBackend
@@ -108,6 +109,22 @@ def test_effective_workdir_is_injected_into_the_four_consumers(tmp_path: Path) -
     assert core.conversations_service._effective_workdir is resolver
     assert core.status_service._effective_workdir is resolver
     assert core.session_service._effective_workdir is resolver
+
+
+def test_model_catalog_is_wired_to_the_core_seams(tmp_path: Path) -> None:
+    core = build_prompt_stack(sessions_path=tmp_path / "sessions.json")
+
+    assert isinstance(core.model_catalog, OpenCodeModelCatalog)
+    assert core.model_catalog._store is core.session_store
+    assert [source.name for source in core.model_catalog._sources] == ["http", "cli", "aliases"]
+    http_source = core.model_catalog._sources[0]
+    assert getattr(http_source, "_client", None) is core.server_client
+
+
+def test_model_catalog_skips_http_without_a_server_client(tmp_path: Path) -> None:
+    core = build_prompt_stack(sessions_path=tmp_path / "sessions.json", backend="cli")
+
+    assert [source.name for source in core.model_catalog._sources] == ["skip", "cli", "aliases"]
 
 
 def test_sessions_directory_is_injected(tmp_path: Path) -> None:
