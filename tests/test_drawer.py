@@ -127,6 +127,46 @@ def test_drawer_height_is_pinned_to_page_height() -> None:
     assert drawer.control.width == 500
 
 
+# ── <100ms guards (SH-05 / FD-05) ──────────────────────────────────────
+
+
+def test_drawer_sessions_are_virtualized_in_a_listview() -> None:
+    """The session list is an ``ft.ListView`` so it virtualizes (SH-04)."""
+    drawer, _ = _build(_snapshot(_summary()))
+
+    assert isinstance(drawer.sessions_view, ft.ListView)
+
+
+def test_drawer_content_is_prebuilt_at_startup() -> None:
+    """The tree is built once; opening only reveals it (no build on open)."""
+    drawer, _ = _build(_snapshot(_summary(title="Pre-armada")))
+
+    assert drawer.sessions_view.controls
+    assert "Pre-armada" in _texts(drawer.sessions_view)
+
+
+def test_drawer_render_does_not_flush_per_row() -> None:
+    """``render`` mutates controls but never updates: the shell batches once."""
+    page = FakePage()
+    drawer, page = _build(_snapshot(_summary(real_id="ses_1")), page)
+
+    drawer.render(_snapshot(_summary(real_id="ses_2"), _summary(real_id="ses_3")))
+
+    assert page.update_calls == 0
+
+
+def test_drawer_follows_a_window_resize() -> None:
+    """SH-01/A3: width + height track ``page.width``/``page.height`` on resize."""
+    drawer, page = _build(_snapshot(_summary()))
+
+    page.width, page.height = 1280, 720
+    drawer.set_width(page.width)
+    drawer.set_height(page.height)
+
+    assert drawer.control.width == 1280
+    assert drawer.content.height == 720
+
+
 def test_drawer_zone_order_and_24px_gap() -> None:
     drawer, _ = _build(_snapshot(_summary()))
 

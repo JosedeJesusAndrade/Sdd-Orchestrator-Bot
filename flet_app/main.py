@@ -202,13 +202,10 @@ async def main(page: ft.Page) -> None:
             edit_mode.activate()
             page.update()
 
-    async def refresh_status() -> None:
-        snapshot = await status_strip.load()
-        chat.set_status(snapshot)
-        page.update()
-
     def on_status_refresh() -> None:
-        page.run_task(refresh_status)
+        # The strip's refresh icon reloads the sessions AND the status in one
+        # batched pass: one tap => one ``refresh_all`` (no polling, no echo).
+        page.run_task(refresh_all)
 
     async def refresh_all() -> None:
         snapshot = await sidebar.load()
@@ -406,6 +403,21 @@ async def main(page: ft.Page) -> None:
     # A4: ``page.drawer`` MUST be assigned before the first ``show_drawer``;
     # both ``show_drawer``/``close_drawer`` are async in flet 1.0.3.
     page.drawer = drawer.control
+
+    def on_resize(event: ft.PageResizeEvent | None = None) -> None:
+        """Keep the 100%-wide drawer and its pinned footer in step (SH-01/A3).
+
+        One resize => set the width + height and a single ``page.update()``.
+        """
+        width = event.width if event is not None else page.width
+        height = event.height if event is not None else page.height
+        if width is not None:
+            drawer.set_width(float(width))
+        if height is not None:
+            drawer.set_height(float(height))
+        page.update()
+
+    page.on_resize = on_resize
     page.update()
 
     await refresh_all()
