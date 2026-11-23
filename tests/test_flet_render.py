@@ -86,3 +86,28 @@ async def test_progress_row_is_appended_and_finished_in_place() -> None:
 
     assert len(chat.conversation.controls) == 1, "progress is edited in place"
     assert page.update_calls == 2
+
+
+async def test_reset_clears_turns_and_rearms_the_first_message_hook() -> None:
+    """``reset`` empties the attached column and re-arms the welcome hook."""
+    calls: list[int] = []
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=_REPO)
+    page = FakePage()
+    view = FletChatView(
+        cast(ft.Page, page),
+        chat.conversation,
+        on_first_message=lambda: calls.append(1),
+    )
+
+    await view.send("hola", role="user")
+    assert calls == [1]
+    assert len(chat.conversation.controls) == 1
+
+    view.reset()
+    assert chat.conversation.controls == []
+    # The same attached column stays visible and reusable.
+    assert chat.conversation_holder.visible is True
+    assert chat.conversation_holder.content is chat.conversation
+
+    await view.send("otra vez", role="user")
+    assert calls == [1, 1]

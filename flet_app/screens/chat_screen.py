@@ -1,21 +1,32 @@
-"""Chat screen: assembles the top bar, greeting, conversation and composer.
+"""Chat screen: assembles the header, status strip, conversation and composer.
 
-Composition follows Gemini: chrome at the top, a centered greeting in the
-empty state, a scrolling conversation once messages exist, and a floating
-pill composer pinned to the bottom with the workdir muted underneath.
+Composition only: the header, the thin status row, the welcome overlay and the
+floating composer are dropped into the shared ``app_background`` shell. The data
+comes from ``main.py`` through ``set_model``/``set_workdir``/``set_status``; the
+gradient lives ONLY on the welcome state and disappears after the first message.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import flet as ft
 
+from flet_app.components.app_background import app_background
 from flet_app.components.composer import Composer, build_composer
 from flet_app.components.greeting import build_greeting
+from flet_app.components.status_strip import status_strip
 from flet_app.components.top_bar import TopBar, build_top_bar
 from flet_app.core.design_system import DS
+
+if TYPE_CHECKING:
+    from services.status_service import StatusSnapshot
+
+
+def _noop() -> None:
+    """Inert refresh callback until ``main`` wires the status controller."""
 
 
 @dataclass
@@ -28,33 +39,72 @@ class ChatScreen:
     conversation: ft.Column
     greeting: ft.Container
     conversation_holder: ft.Container
+    status_holder: ft.Container
+    background: ft.Container
+    glows: list[ft.Control]
+    status_refresh: Callable[[], None]
 
     def set_model(self, model: str) -> None:
         self.top_bar.set_model(model)
 
+    def set_workdir(self, workdir: str) -> None:
+        self.composer.set_workdir(workdir)
+
+    def set_status(self, snapshot: StatusSnapshot | None) -> None:
+        """Re-render the thin status row for ``snapshot`` (``None`` degrades)."""
+        self.status_holder.content = status_strip(snapshot, on_refresh=self.status_refresh)
+
+    def set_edit_mode(self, editing: bool) -> None:
+        self.top_bar.set_edit_mode(editing)
+
     def reveal_conversation(self) -> None:
-        """Hide the greeting overlay on the first message.
+        """Hide the greeting overlay and drop the gradient on the first message.
 
         The conversation column is mounted VISIBLE from the very first frame
-        (see ``build_chat_screen``); only the greeting overlay is hidden here.
-        Toggling the conversation from ``visible=False`` to ``True`` in the
-        same patch that appended the first message left some clients with a
-        subtree that never rendered. Keeping it always visible removes that
-        failure mode entirely.
+        (see ``build_chat_screen``); only the greeting overlay and the welcome
+        gradient are toggled here.
         """
         self.greeting.visible = False
+        self._apply_welcome(False)
+
+    def reset(self) -> None:
+        """Clear the view for a new chat / session switch (CH-03)."""
+        self.conversation.controls.clear()
+        self.greeting.visible = True
+        self._apply_welcome(True)
+
+    def _apply_welcome(self, welcome: bool) -> None:
+        self.background.gradient = DS.gradients.background() if welcome else None
+        for glow in self.glows:
+            glow.visible = welcome
 
 
 def build_chat_screen(
     *,
     model: str,
     workdir: str,
-    on_menu: Callable[[], None] | None = None,
+    profile_name: str | None = None,
+    on_toggle: Callable[[], None] | None = None,
+    on_open_model: Callable[[], None] | None = None,
+    on_new_chat: Callable[[], None] | None = None,
+    on_edit: Callable[[], None] | None = None,
+    on_refresh_status: Callable[[], None] | None = None,
 ) -> ChatScreen:
-    """Build the Slice 1 chat screen."""
-    top_bar = build_top_bar(model, on_menu=on_menu)
+    """Build the chat screen (A8: optional callbacks, keyword-only)."""
+    top_bar = build_top_bar(
+        model,
+        profile_name=profile_name,
+        on_toggle=on_toggle,
+        on_open_model=on_open_model,
+        on_new_chat=on_new_chat,
+        on_edit=on_edit,
+    )
     greeting = build_greeting()
     composer = build_composer(workdir=workdir)
+    status_refresh = on_refresh_status if on_refresh_status is not None else _noop
+    status_holder = ft.Container(
+        content=status_strip(None, on_refresh=status_refresh),
+    )
 
     conversation = ft.Column(
         controls=[],
@@ -103,57 +153,27 @@ def build_chat_screen(
     )
 
     body = ft.Column(
-        controls=[top_bar.control, conversation_area, composer_holder],
+        controls=[top_bar.control, status_holder, conversation_area, composer_holder],
         expand=True,
         spacing=0,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
     )
 
-    control = ft.Container(
-        expand=True,
-        gradient=DS.gradients.background(),
-        content=ft.Stack(
-            expand=True,
-            fit=ft.StackFit.EXPAND,
-            controls=[
-                ft.Container(
-                    width=520,
-                    height=520,
-                    top=-200,
-                    right=-180,
-                    border_radius=260,
-                    gradient=DS.gradients.lavender_glow(),
-                    ignore_interactions=True,
-                ),
-                ft.Container(
-                    width=420,
-                    height=420,
-                    bottom=-220,
-                    left=-140,
-                    border_radius=210,
-                    gradient=DS.gradients.blue_glow(),
-                    ignore_interactions=True,
-                ),
-                # ``SafeArea`` keeps the chrome below the notch/status bar on a
-                # real APK. The Flet viewer reports no intrusions, so the top
-                # bar also carries a small explicit top padding (top_bar.py).
-                ft.SafeArea(
-                    content=body,
-                    expand=True,
-                    avoid_intrusions_top=True,
-                    avoid_intrusions_bottom=True,
-                    avoid_intrusions_left=False,
-                    avoid_intrusions_right=False,
-                ),
-            ],
-        ),
-    )
+    # Welcome-only gradient: ``app_background`` builds the shell once; the
+    # gradient and its two glows are toggled off when the first turn arrives.
+    shell = app_background(body, gradient=True)
+    stack = shell.content
+    glows = list(stack.controls[:-1]) if isinstance(stack, ft.Stack) else []
 
     return ChatScreen(
-        control=control,
+        control=shell,
         top_bar=top_bar,
         composer=composer,
         conversation=conversation,
         greeting=greeting,
         conversation_holder=conversation_holder,
+        status_holder=status_holder,
+        background=shell,
+        glows=glows,
+        status_refresh=status_refresh,
     )

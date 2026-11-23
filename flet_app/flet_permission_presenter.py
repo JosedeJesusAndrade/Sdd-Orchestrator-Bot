@@ -3,7 +3,8 @@
 The router receives ``permission.asked`` from the OpenCode server and waits
 for a human. This adapter renders the request as a modal ``ft.AlertDialog``
 with the three possible decisions and, when the router settles the request,
-pops the dialog and appends a small muted notice to the conversation.
+pops the dialog and shows the outcome as a floating ``ft.SnackBar`` (visible
+from any screen, not only the chat column).
 
 Design notes:
 
@@ -30,7 +31,6 @@ from collections.abc import Awaitable, Callable
 
 import flet as ft
 
-from flet_app.components.message_bubble import assistant_message
 from flet_app.core.design_system import DS
 from services.permissions import (
     PermissionDecision,
@@ -191,11 +191,9 @@ class FletPermissionPresenter:
     def __init__(
         self,
         page: ft.Page,
-        conversation_column: ft.Column,
         resolve: ResolveCallback,
     ) -> None:
         self._page = page
-        self._column = conversation_column
         self._resolve = resolve
         self._queue: list[PermissionRequest] = []
         self._current: PermissionRequest | None = None
@@ -351,36 +349,24 @@ class FletPermissionPresenter:
             )
 
     def _append_notice(self, decision: PermissionDecision) -> None:
+        """Show the outcome as a fresh floating SnackBar (3s, ``surface_raised``)."""
+        page = self._page
+        show = getattr(page, "show_dialog", None) if page is not None else None
+        if show is None:
+            return
         try:
-            self._column.controls.append(
-                assistant_message(
-                    ft.Text(
-                        value=result_text(decision),
-                        size=DS.typography.small_size,
-                        color=DS.colors.text_muted,
-                        italic=True,
-                    )
+            show(
+                ft.SnackBar(
+                    content=ft.Text(value=result_text(decision)),
+                    duration=3000,
+                    behavior=ft.SnackBarBehavior.FLOATING,
+                    bgcolor=DS.colors.surface_raised,
                 )
             )
         except Exception:
             logger.debug(
-                "Permission notice could not be appended",
+                "Permission notice could not be shown",
                 extra={"event": "permission_dialog_notice_error"},
-                exc_info=True,
-            )
-            return
-        self._update()
-
-    def _update(self) -> None:
-        update = getattr(self._page, "update", None) if self._page is not None else None
-        if update is None:
-            return
-        try:
-            update()
-        except Exception:
-            logger.debug(
-                "page.update failed after permission notice",
-                extra={"event": "permission_dialog_update_error"},
                 exc_info=True,
             )
 

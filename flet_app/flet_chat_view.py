@@ -100,6 +100,12 @@ class FletChatView(ChatView):
         self._on_first_message = on_first_message
         self._started = False
 
+    def reset(self) -> None:
+        """Clear the rendered turns and re-arm the first-message hook (CH-03)."""
+        self._column.controls.clear()
+        self._started = False
+        self._page.update()
+
     def _append(self, control: ft.Control) -> None:
         if not self._started:
             self._started = True

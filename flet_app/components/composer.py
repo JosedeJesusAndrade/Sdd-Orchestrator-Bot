@@ -1,8 +1,10 @@
-"""Composer molecule: the pill input, circular send button and workdir.
+"""Composer molecule: the multi-line pill, morphing send/cancel button and workdir.
 
-The attach and mic controls are visually correct placeholders; voice wiring
-arrives in a later slice. The workdir sits *outside* and *below* the pill, in
-a deliberately muted tone.
+The input grows from one to five lines and then scrolls internally; Enter always
+inserts a newline (there is no ``on_submit``) and only the circular button
+dispatches. One button morphs between send (``ARROW_UPWARD``) and cancel
+(``STOP_CIRCLE``) through an ``AnimatedSwitcher``. The workdir sits *outside* and
+*below* the pill, in a deliberately muted tone.
 """
 
 from __future__ import annotations
@@ -34,16 +36,48 @@ class Composer:
     control: ft.Container
     field: ft.TextField
     send_button: ft.Container
+    icon_switcher: ft.AnimatedSwitcher
+    workdir_text: ft.Text
+    workdir_caption: ft.Container
+    running: bool = False
 
-    def bind(self, on_send: SendHandler) -> None:
-        """Wire submit (Enter) and the circular send button."""
-        self.field.on_submit = on_send
-        self.send_button.on_click = on_send
+    def bind(
+        self,
+        on_send: SendHandler,
+        *,
+        on_cancel: SendHandler | None = None,
+    ) -> None:
+        """Wire the circular button to send, or cancel while a prompt runs."""
+
+        async def dispatch(
+            event: ft.Event[ft.TextField] | ft.Event[ft.Container] | None,
+        ) -> None:
+            if self.running and on_cancel is not None:
+                await on_cancel(event)
+            else:
+                await on_send(event)
+
+        self.send_button.on_click = dispatch
 
     def set_busy(self, busy: bool) -> None:
-        """Dim and disable the send action while a prompt is running."""
-        self.send_button.disabled = busy
-        self.send_button.opacity = 0.55 if busy else 1.0
+        """Disable text entry while a prompt is running."""
+        self.field.disabled = busy
+
+    def set_running(self, running: bool) -> None:
+        """Morph the button between send and cancel and flip its target."""
+        self.running = running
+        self.icon_switcher.content = ft.Icon(
+            ft.Icons.STOP_CIRCLE if running else ft.Icons.ARROW_UPWARD,
+            size=20,
+            color=DS.colors.white,
+        )
+        self.send_button.bgcolor = DS.colors.danger if running else DS.colors.accent
+        self.send_button.tooltip = "Cancelar" if running else "Enviar"
+
+    def set_workdir(self, workdir: str) -> None:
+        """Update the muted caption under the pill."""
+        self.workdir_text.value = shorten_workdir(workdir)
+        self.workdir_caption.tooltip = workdir
 
 
 def shorten_workdir(workdir: str) -> str:
@@ -78,13 +112,24 @@ def build_composer(*, workdir: str) -> Composer:
             horizontal=DS.spacing.xs,
             vertical=DS.spacing.md,
         ),
-        multiline=False,
+        multiline=True,
+        min_lines=1,
+        max_lines=5,
+        shift_enter=False,
+        keyboard_type=ft.KeyboardType.MULTILINE,
+    )
+
+    icon_switcher = ft.AnimatedSwitcher(
+        content=ft.Icon(ft.Icons.ARROW_UPWARD, size=20, color=DS.colors.white),
+        duration=DS.motion.send_ms,
+        switch_in_curve=DS.motion.curve,
+        switch_out_curve=DS.motion.curve,
     )
 
     send_button = ft.Container(
-        width=40,
-        height=40,
-        border_radius=20,
+        width=DS.sizes.send,
+        height=DS.sizes.send,
+        border_radius=DS.sizes.send / 2,
         bgcolor=DS.colors.accent,
         alignment=ft.Alignment.CENTER,
         tooltip="Enviar",
@@ -93,7 +138,7 @@ def build_composer(*, workdir: str) -> Composer:
             blur_radius=18,
             color=DS.colors.alpha(DS.colors.accent, 0.4),
         ),
-        content=ft.Icon(ft.Icons.ARROW_UPWARD, size=20, color=DS.colors.white),
+        content=icon_switcher,
     )
 
     pill = ft.Container(
@@ -145,4 +190,11 @@ def build_composer(*, workdir: str) -> Composer:
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
     )
-    return Composer(control=control, field=field, send_button=send_button)
+    return Composer(
+        control=control,
+        field=field,
+        send_button=send_button,
+        icon_switcher=icon_switcher,
+        workdir_text=workdir_text,
+        workdir_caption=workdir_caption,
+    )

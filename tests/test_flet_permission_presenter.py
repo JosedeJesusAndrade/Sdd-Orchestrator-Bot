@@ -1,8 +1,9 @@
 """Tests for the Flet permission presenter (no real Flet client).
 
 The presenter is a pure control builder plus a small queue; these tests use a
-``FakePage`` that records ``show_dialog`` / ``pop_dialog`` / ``update`` calls,
-following the harness style of ``tests/test_flet_render.py``.
+``FakePage`` that records ``show_dialog`` / ``pop_dialog`` calls, following the
+harness style of ``tests/test_flet_render.py``. Outcome notices are SnackBars
+(``flet-ui`` P4), inspected via ``page.snackbars``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any, cast
 import flet as ft
 import pytest
 
+from flet_app.core.design_system import DS
 from flet_app.flet_permission_presenter import (
     ALWAYS_LABEL,
     PERMIT_LABEL,
@@ -32,25 +34,25 @@ from services.permissions import PermissionDecision, PermissionRequest
 
 
 class FakePage:
-    """Minimal ``ft.Page`` stand-in recording dialog calls."""
+    """Minimal ``ft.Page`` stand-in recording dialog and snackbar calls."""
 
     def __init__(self) -> None:
         self.dialogs: list[ft.AlertDialog] = []
+        self.snackbars: list[ft.SnackBar] = []
         self.popped = 0
-        self.updates = 0
         self.show_error: Exception | None = None
 
-    def show_dialog(self, dialog: ft.AlertDialog) -> None:
+    def show_dialog(self, dialog: ft.DialogControl) -> None:
         if self.show_error is not None:
             raise self.show_error
-        self.dialogs.append(dialog)
+        if isinstance(dialog, ft.SnackBar):
+            self.snackbars.append(dialog)
+        else:
+            self.dialogs.append(cast(ft.AlertDialog, dialog))
 
     def pop_dialog(self) -> ft.AlertDialog | None:
         self.popped += 1
         return None
-
-    def update(self, *controls: ft.Control) -> None:
-        self.updates += 1
 
 
 class BrokenPopPage(FakePage):
@@ -91,15 +93,12 @@ def _request(
 
 def _presenter(
     page: FakePage | None = None,
-    column: ft.Column | None = None,
 ) -> tuple[
     FletPermissionPresenter,
     FakePage,
-    ft.Column,
     list[tuple[str, PermissionDecision]],
 ]:
     fake_page = page or FakePage()
-    conversation = column or ft.Column()
     decisions: list[tuple[str, PermissionDecision]] = []
 
     async def resolve(request_id: str, decision: PermissionDecision) -> bool:
@@ -108,10 +107,9 @@ def _presenter(
 
     presenter = FletPermissionPresenter(
         cast(ft.Page, fake_page),
-        conversation,
         resolve=resolve,
     )
-    return presenter, fake_page, conversation, decisions
+    return presenter, fake_page, decisions
 
 
 def _texts(control: ft.Control) -> list[str]:
@@ -146,9 +144,11 @@ async def _click(button: ft.TextButton) -> None:
     await handler(None)
 
 
-def _notice_value(column: ft.Column) -> str:
-    notice = cast(ft.Container, column.controls[0])
-    text = cast(ft.Text, notice.content)
+def _notice_value(page: FakePage) -> str:
+    snack = page.snackbars[-1]
+    assert snack.duration == 3000
+    assert snack.behavior == ft.SnackBarBehavior.FLOATING
+    text = cast(ft.Text, snack.content)
     return text.value or ""
 
 
@@ -174,7 +174,7 @@ def test_multiple_patterns_are_rendered() -> None:
 
 
 async def test_show_calls_page_show_dialog() -> None:
-    presenter, page, _, _ = _presenter()
+    presenter, page, _ = _presenter()
 
     await presenter.show(_request())
 
@@ -186,7 +186,7 @@ async def test_show_calls_page_show_dialog() -> None:
 async def test_show_and_resolve_log_presenter_events(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    presenter, _, _, _ = _presenter()
+    presenter, _, _ = _presenter()
     request = _request()
 
     with caplog.at_level(logging.INFO, logger="opencode_bot.flet_app.flet_permission_presenter"):
@@ -218,7 +218,7 @@ async def test_show_and_resolve_log_presenter_events(
 async def test_queued_request_logs_that_it_was_queued(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    presenter, _, _, _ = _presenter()
+    presenter, _, _ = _presenter()
 
     with caplog.at_level(logging.INFO, logger="opencode_bot.flet_app.flet_permission_presenter"):
         await presenter.show(_request("per_1"))
@@ -245,7 +245,7 @@ async def test_queued_request_logs_that_it_was_queued(
 
 
 async def test_queue_shows_one_dialog_at_a_time() -> None:
-    presenter, page, _, _ = _presenter()
+    presenter, page, _ = _presenter()
 
     await presenter.show(_request("per_1"))
     await presenter.show(_request("per_2", command="rm -rf /tmp/x"))
@@ -261,7 +261,7 @@ async def test_queue_shows_one_dialog_at_a_time() -> None:
 
 
 async def test_buttons_deliver_the_right_decisions() -> None:
-    presenter, page, _, decisions = _presenter()
+    presenter, page, decisions = _presenter()
     request = _request()
 
     await presenter.show(request)
@@ -307,17 +307,28 @@ async def test_resolve_pops_and_appends_the_notice(
     decision: PermissionDecision,
     expected: str,
 ) -> None:
-    presenter, page, column, _ = _presenter()
+    presenter, page, _ = _presenter()
     request = _request()
 
     await presenter.show(request)
     await presenter.resolve(request.id, decision)
 
     assert page.popped == 1
-    assert len(column.controls) == 1
-    assert _notice_value(column) == expected
-    assert page.updates == 1
+    assert len(page.snackbars) == 1
+    assert _notice_value(page) == expected
     assert presenter.pending_count == 0
+
+
+async def test_notice_is_a_floating_snackbar() -> None:
+    presenter, page, _ = _presenter()
+    request = _request()
+
+    await presenter.show(request)
+    await presenter.resolve(request.id, PermissionDecision(reply="once"))
+
+    snack = page.snackbars[-1]
+    assert snack.bgcolor == DS.colors.surface_raised
+    assert cast(ft.Text, snack.content).value == RESULT_PERMITTED
 
 
 async def test_result_text_maps_timeout_to_the_automatic_rejection() -> None:
@@ -340,7 +351,7 @@ def test_result_text_maps_cancellation_to_the_interrupted_turn() -> None:
 
 
 async def test_duplicate_resolve_is_a_noop() -> None:
-    presenter, page, column, _ = _presenter()
+    presenter, page, _ = _presenter()
     request = _request()
 
     await presenter.show(request)
@@ -348,12 +359,12 @@ async def test_duplicate_resolve_is_a_noop() -> None:
     await presenter.resolve(request.id, PermissionDecision(reply="reject"))
 
     assert page.popped == 1, "the dialog must be popped exactly once"
-    assert len(column.controls) == 1
-    assert _notice_value(column) == RESULT_PERMITTED
+    assert len(page.snackbars) == 1
+    assert _notice_value(page) == RESULT_PERMITTED
 
 
 async def test_queued_request_resolved_before_shown_is_never_displayed() -> None:
-    presenter, page, column, _ = _presenter()
+    presenter, page, _ = _presenter()
 
     await presenter.show(_request("per_1"))
     await presenter.show(_request("per_2"))
@@ -361,34 +372,31 @@ async def test_queued_request_resolved_before_shown_is_never_displayed() -> None
 
     assert page.popped == 0, "the visible dialog belongs to per_1"
     assert len(page.dialogs) == 1
-    assert _notice_value(column) == RESULT_TIMED_OUT
+    assert _notice_value(page) == RESULT_TIMED_OUT
 
     await presenter.resolve("per_1", PermissionDecision(reply="once"))
     assert len(page.dialogs) == 1, "the timed-out request was removed from the queue"
 
 
 async def test_missing_page_does_not_crash() -> None:
-    column = ft.Column()
     presenter = FletPermissionPresenter(
         cast(ft.Page, None),
-        column,
         resolve=_resolve_true,
     )
 
     await presenter.show(_request())
     await presenter.resolve("per_1", PermissionDecision(reply="once"))
 
-    assert column.controls == []
     assert presenter.pending_count == 0
 
 
-async def test_pop_failure_is_swallowed_but_the_notice_is_appended() -> None:
+async def test_pop_failure_is_swallowed_but_the_notice_is_shown() -> None:
     page = BrokenPopPage()
-    presenter, _, column, _ = _presenter(page=page)
+    presenter, _, _ = _presenter(page=page)
     request = _request()
 
     await presenter.show(request)
     await presenter.resolve(request.id, PermissionDecision(reply="reject"))
 
-    assert len(column.controls) == 1
-    assert _notice_value(column) == RESULT_REJECTED
+    assert len(page.snackbars) == 1
+    assert _notice_value(page) == RESULT_REJECTED

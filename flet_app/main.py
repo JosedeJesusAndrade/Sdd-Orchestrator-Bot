@@ -1,13 +1,13 @@
-"""Flet GUI entry point — Slice 1: design system + polished chat screen.
+"""Flet GUI entry point — shell with a page-level drawer and the chat screen.
 
 Run (desktop):  .venv\\Scripts\\flet.exe run flet_app/main.py
 Android (QR):   .venv\\Scripts\\flet.exe run --android flet_app/main.py
 
-The UI is the Gemini-style shell from ``flet_app/screens`` while the prompt
-travels through the SAME ``build_prompt_stack()`` composition root and
-``PromptService.execute`` the Telegram bot uses; only the ``ChatView``
-implementation differs. Everything is async on Flet's single event loop —
-never ``page.run_thread`` (the core is loop-bound and contextvar-aware).
+Chat is the only main screen; a 100%-wide ``NavigationDrawer`` holds the
+sessions. The prompt travels through the SAME ``build_prompt_stack()``
+composition root and ``PromptService.execute`` the Telegram bot uses; only the
+``ChatView`` implementation differs. Everything is async on Flet's single event
+loop — never ``page.run_thread`` (the core is loop-bound and contextvar-aware).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import cast
 
 # ``flet run`` may execute this file with flet_app/ as sys.path[0]; make the
 # repository root importable so ``services.*`` resolves.
@@ -31,6 +32,8 @@ from core_config import DEFAULT_MODEL, setup_logger  # noqa: E402
 # config/library modules has no logging side effects by design.
 setup_logger()
 
+from flet_app.components.drawer import build_drawer  # noqa: E402
+from flet_app.components.model_picker import model_picker  # noqa: E402
 from flet_app.core.design_system import DS  # noqa: E402
 from flet_app.core.navigation import ScreenHost  # noqa: E402
 from flet_app.data.explorer import ExplorerController  # noqa: E402
@@ -41,8 +44,7 @@ from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
 from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
-from flet_app.screens.conversations_screen import ConversationsScreen  # noqa: E402
-from services.agent_sessions import ConversationSummary, Message  # noqa: E402
+from flet_app.ui_strings import TOAST_COMING_SOON  # noqa: E402
 from services.composition import build_prompt_stack  # noqa: E402
 from services.frontend_gate import (  # noqa: E402
     AllowAllGate,
@@ -140,68 +142,83 @@ async def main(page: ft.Page) -> None:
         logger.exception("No se pudo resolver el workdir; usando el fallback")
         workdir = str(core.effective_workdir.fallback)
 
-    def open_menu() -> None:
-        page.run_task(show_conversations)
+    initial_snapshot = await sidebar.load()
+    editing = False
 
-    chat = build_chat_screen(
-        model=model,
-        workdir=workdir,
-        on_menu=open_menu,
-    )
-    view = FletChatView(
-        page,
-        chat.conversation,
-        on_first_message=chat.reveal_conversation,
-    )
-
-    # Permission prompts share the router with Telegram. The Flet presenter
-    # renders them as queued modal dialogs and writes the outcome notices into
-    # the SAME column the chat view renders into. With ``OPENCODE_BACKEND=cli``
-    # there is no router, so nothing is registered and the UI is unchanged.
-    if core.permission_router is not None:
-        core.permission_router.add_presenter(
-            FletPermissionPresenter(
-                page,
-                chat.conversation,
-                resolve=core.permission_router.resolve_from_ui,
+    def show_snackbar(message: str) -> None:
+        page.show_dialog(
+            ft.SnackBar(
+                content=ft.Text(value=message),
+                duration=3000,
+                behavior=ft.SnackBarBehavior.FLOATING,
+                bgcolor=DS.colors.surface_raised,
             )
         )
-        logger.info(
-            "Flet permission presenter registered",
-            extra={"event": "permission_presenter_registered", "frontend": "flet"},
-        )
-    else:
-        logger.info(
-            "Flet permission presenter skipped",
-            extra={"event": "permission_presenter_skipped", "frontend": "flet"},
-        )
 
-    host = ScreenHost(page, chat.control)
+    async def open_drawer() -> None:
+        if page.drawer is None:
+            return
+        try:
+            show = cast(Callable[[], Awaitable[None]], page.show_drawer)
+            await show()
+        except ValueError:
+            logger.debug("Drawer no disponible", extra={"event": "flet_drawer_open_failed"})
 
-    def go_back() -> None:
-        page.run_task(host.show, chat.control)
+    async def close_drawer() -> None:
+        if page.drawer is None:
+            return
+        try:
+            hide = cast(Callable[[], Awaitable[None]], page.close_drawer)
+            await hide()
+        except Exception:
+            logger.debug("Drawer no disponible", extra={"event": "flet_drawer_close_failed"})
 
-    def on_open(
-        summary: ConversationSummary,
-        messages: list[Message],
-        active_name: str,
-    ) -> None:
-        logger.info("Conversación abierta: %s (%s)", summary.title, active_name)
-        render_history(chat.conversation, messages)
-        chat.reveal_conversation()
-        page.run_task(host.show, chat.control)
+    def set_drawer_open(open_: bool) -> None:
+        """Sync ``expanded`` then reveal/hide the drawer (one sync toggle)."""
+        if sidebar.snapshot.expanded != open_:
+            sidebar.toggle()
+        page.run_task(open_drawer if open_ else close_drawer)
 
-    conversations = ConversationsScreen(
-        page,
-        core.conversations_service,
-        CONVERSATION_ID,
-        on_back=go_back,
-        on_open=on_open,
-    )
+    def on_open() -> None:
+        set_drawer_open(True)
 
-    async def show_conversations() -> None:
-        await host.show(conversations.control)
-        await conversations.load()
+    def on_dismiss() -> None:
+        set_drawer_open(False)
+
+    def on_search() -> None:
+        show_snackbar(TOAST_COMING_SOON)
+
+    def on_open_settings() -> None:
+        show_snackbar(TOAST_COMING_SOON)
+
+    def on_open_explorer() -> None:
+        logger.debug("Explorador se cablea en P5", extra={"event": "flet_explorer_pending"})
+
+    def on_edit() -> None:
+        nonlocal editing
+        editing = not editing
+        chat.set_edit_mode(editing)
+        drawer.set_edit_mode(editing)
+        page.update()
+
+    async def refresh_status() -> None:
+        snapshot = await status_strip.load()
+        chat.set_status(snapshot)
+        page.update()
+
+    def on_status_refresh() -> None:
+        page.run_task(refresh_status)
+
+    async def refresh_all() -> None:
+        snapshot = await sidebar.load()
+        drawer.render(snapshot)
+        if snapshot.model:
+            chat.set_model(snapshot.model)
+        if snapshot.workdir:
+            chat.set_workdir(snapshot.workdir)
+        status_snapshot = await status_strip.load()
+        chat.set_status(status_snapshot)
+        page.update()
 
     async def on_send(
         event: ft.Event[ft.TextField] | ft.Event[ft.Container] | None = None,
@@ -220,6 +237,7 @@ async def main(page: ft.Page) -> None:
         try:
             chat.composer.field.value = ""
             chat.composer.set_busy(True)
+            chat.composer.set_running(True)
             page.update()
 
             await view.send(text, role="user")
@@ -236,11 +254,124 @@ async def main(page: ft.Page) -> None:
                 await view.send(f"❌ Error inesperado: `{exc}`")
         finally:
             chat.composer.set_busy(False)
+            chat.composer.set_running(False)
             page.update()
             finish_request("flet_on_send", CONVERSATION_ID, started)
+        await refresh_all()
 
-    chat.composer.bind(on_send)
+    async def on_cancel(
+        event: ft.Event[ft.TextField] | ft.Event[ft.Container] | None = None,
+    ) -> None:
+        core.prompt_service.cancel(CONVERSATION_ID)
+
+    async def select_session(real_id: str) -> None:
+        await sidebar.select(real_id)
+        try:
+            messages = await core.conversations_service.messages(real_id, limit=50)
+        except Exception:
+            logger.exception(
+                "No se pudo cargar el historial de la sesión",
+                extra={"event": "flet_history_failed"},
+            )
+            messages = []
+        render_history(chat.conversation, messages)
+        chat.reveal_conversation()
+        await refresh_all()
+        on_dismiss()
+
+    def on_select(real_id: str) -> None:
+        page.run_task(select_session, real_id)
+
+    async def new_chat() -> None:
+        await sidebar.new_chat()
+        view.reset()
+        chat.reset()
+        await refresh_all()
+        on_dismiss()
+
+    def on_new_chat() -> None:
+        page.run_task(new_chat)
+
+    async def select_model(model_id: str) -> None:
+        await model_selector.select(model_id)
+        page.pop_dialog()
+        await refresh_all()
+
+    def on_model_select(model_id: str) -> None:
+        page.run_task(select_model, model_id)
+
+    def on_model_retry() -> None:
+        page.pop_dialog()
+        page.run_task(open_model_picker)
+
+    async def open_model_picker() -> None:
+        snapshot = await model_selector.load()
+        if snapshot is None:
+            return
+        page.show_dialog(model_picker(snapshot, on_select=on_model_select, on_retry=on_model_retry))
+
+    def on_pick_model() -> None:
+        page.run_task(open_model_picker)
+
+    chat = build_chat_screen(
+        model=model,
+        workdir=workdir,
+        profile_name=initial_snapshot.profile_name,
+        on_toggle=on_open,
+        on_open_model=on_pick_model,
+        on_new_chat=on_new_chat,
+        on_edit=on_edit,
+        on_refresh_status=on_status_refresh,
+    )
+    view = FletChatView(
+        page,
+        chat.conversation,
+        on_first_message=chat.reveal_conversation,
+    )
+
+    # Permission prompts share the router with Telegram. The Flet presenter
+    # renders them as queued modal dialogs and shows the outcome as a floating
+    # SnackBar. With ``OPENCODE_BACKEND=cli`` there is no router, so nothing is
+    # registered and the UI is unchanged.
+    if core.permission_router is not None:
+        core.permission_router.add_presenter(
+            FletPermissionPresenter(
+                page,
+                resolve=core.permission_router.resolve_from_ui,
+            )
+        )
+        logger.info(
+            "Flet permission presenter registered",
+            extra={"event": "permission_presenter_registered", "frontend": "flet"},
+        )
+    else:
+        logger.info(
+            "Flet permission presenter skipped",
+            extra={"event": "permission_presenter_skipped", "frontend": "flet"},
+        )
+
+    host = ScreenHost(page, chat.control)
+
+    drawer = build_drawer(
+        page,
+        initial_snapshot,
+        on_toggle=on_dismiss,
+        on_select=on_select,
+        on_new_chat=on_new_chat,
+        on_open_explorer=on_open_explorer,
+        on_open_settings=on_open_settings,
+        on_edit=on_edit,
+        on_search=on_search,
+    )
+
+    chat.composer.bind(on_send, on_cancel=on_cancel)
     page.add(host.control)
+    # A4: ``page.drawer`` MUST be assigned before the first ``show_drawer``;
+    # both ``show_drawer``/``close_drawer`` are async in flet 1.0.3.
+    page.drawer = drawer.control
+    page.update()
+
+    await refresh_all()
 
     def on_page_close() -> None:
         # D5: the server lives always. The bot may be sharing this process, so

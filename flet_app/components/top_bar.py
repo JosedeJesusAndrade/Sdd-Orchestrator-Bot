@@ -1,7 +1,8 @@
-"""Top bar molecule: menu, active model, new-chat and avatar placeholders.
+"""Top bar molecule: drawer toggle, model picker, new chat, edit and avatar.
 
-The hamburger opens the conversations screen when ``on_menu`` is supplied;
-the model picker and profile menu remain inert until their own slices.
+Pure presentational: it renders the five header controls and forwards each tap
+to a callback. No service is called here; the model label and the pencil icon
+(which reflects edit mode) are the only mutable pieces.
 """
 
 from __future__ import annotations
@@ -28,33 +29,49 @@ def model_display_name(model: str) -> str:
     return tail.title() if tail else model
 
 
+def _initial(profile_name: str | None) -> str:
+    """First letter of the profile name for the avatar, or ``?``."""
+    name = (profile_name or "").strip()
+    return name[:1].upper() if name else "?"
+
+
 @dataclass
 class TopBar:
-    """The assembled bar plus the mutable model label."""
+    """The assembled bar plus the mutable model label and pencil button."""
 
     control: ft.Container
     model_text: ft.Text
+    edit_button: ft.IconButton
 
     def set_model(self, model: str) -> None:
         self.model_text.value = model_display_name(model)
 
-
-def _placeholder_handler(_: ft.Event[ft.Container]) -> None:
-    """Inert click target for controls that arrive in later slices."""
+    def set_edit_mode(self, editing: bool) -> None:
+        """Reflect edit mode on the pencil (icon + tooltip)."""
+        self.edit_button.icon = ft.Icons.CHECK if editing else ft.Icons.EDIT
+        self.edit_button.tooltip = "Listo" if editing else "Renombrar sesiones"
 
 
 def build_top_bar(
     model: str,
     *,
-    on_menu: Callable[[], None] | None = None,
+    profile_name: str | None = None,
+    on_toggle: Callable[[], None] | None = None,
+    on_open_model: Callable[[], None] | None = None,
+    on_new_chat: Callable[[], None] | None = None,
+    on_edit: Callable[[], None] | None = None,
 ) -> TopBar:
-    """Build the Gemini-like top bar for the active ``model``."""
+    """Build the header for the active ``model`` (callbacks, no services)."""
     model_text = ft.Text(
         value=model_display_name(model),
         size=DS.typography.title_size,
         weight=DS.typography.title_weight,
         color=DS.colors.text_primary,
     )
+
+    def handle_model(_: ft.Event[ft.Container]) -> None:
+        if on_open_model is not None:
+            on_open_model()
 
     model_selector = ft.Container(
         content=ft.Row(
@@ -71,28 +88,39 @@ def build_top_bar(
         ),
         padding=ft.Padding.symmetric(horizontal=DS.spacing.sm, vertical=DS.spacing.xs),
         border_radius=DS.radii.small,
-        ink=True,
-        tooltip="Selector de modelo (próximamente)",
-        on_click=_placeholder_handler,
+        ink=on_open_model is not None,
+        tooltip="Elegir modelo",
+        on_click=handle_model,
     )
 
-    avatar = ft.Container(
-        width=36,
-        height=36,
-        border_radius=18,
-        gradient=ft.LinearGradient(
-            begin=ft.Alignment.TOP_LEFT,
-            end=ft.Alignment.BOTTOM_RIGHT,
-            colors=[DS.colors.accent_soft, DS.colors.accent],
-        ),
-        alignment=ft.Alignment.CENTER,
-        tooltip="Perfil (próximamente)",
-        content=ft.Icon(ft.Icons.PERSON, size=18, color=DS.colors.white),
+    def handle_toggle(_: ft.Event[ft.IconButton]) -> None:
+        if on_toggle is not None:
+            on_toggle()
+
+    def handle_new_chat(_: ft.Event[ft.IconButton]) -> None:
+        if on_new_chat is not None:
+            on_new_chat()
+
+    def handle_edit(_: ft.Event[ft.IconButton]) -> None:
+        if on_edit is not None:
+            on_edit()
+
+    profile_avatar = ft.CircleAvatar(
+        radius=DS.sizes.avatar / 2,
+        bgcolor=DS.colors.surface,
+        color=DS.colors.text_primary,
+        tooltip="Perfil",
+        content=ft.Text(value=_initial(profile_name)),
     )
 
-    def handle_menu(_: ft.Event[ft.IconButton]) -> None:
-        if on_menu is not None:
-            on_menu()
+    edit_button = ft.IconButton(
+        icon=ft.Icons.EDIT,
+        icon_color=DS.colors.text_primary,
+        icon_size=20,
+        tooltip="Renombrar sesiones",
+        disabled=on_edit is None,
+        on_click=handle_edit,
+    )
 
     row = ft.Row(
         controls=[
@@ -100,18 +128,22 @@ def build_top_bar(
                 icon=ft.Icons.MENU,
                 icon_color=DS.colors.text_primary,
                 icon_size=22,
-                tooltip="Conversaciones",
-                on_click=handle_menu,
+                tooltip="Sesiones",
+                disabled=on_toggle is None,
+                on_click=handle_toggle,
             ),
             model_selector,
             ft.Container(expand=True),
             ft.IconButton(
-                icon=ft.Icons.EDIT,
+                icon=ft.Icons.ADD_COMMENT,
                 icon_color=DS.colors.text_primary,
                 icon_size=20,
-                tooltip="Nuevo chat (próximamente)",
+                tooltip="Nuevo chat",
+                disabled=on_new_chat is None,
+                on_click=handle_new_chat,
             ),
-            avatar,
+            edit_button,
+            profile_avatar,
         ],
         spacing=DS.spacing.sm,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -129,4 +161,4 @@ def build_top_bar(
             bottom=DS.spacing.md,
         ),
     )
-    return TopBar(control=control, model_text=model_text)
+    return TopBar(control=control, model_text=model_text, edit_button=edit_button)
