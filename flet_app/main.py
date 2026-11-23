@@ -44,6 +44,7 @@ from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
 from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
+from flet_app.screens.explorer_screen import build_explorer_screen  # noqa: E402
 from flet_app.ui_strings import TOAST_COMING_SOON  # noqa: E402
 from services.composition import build_prompt_stack  # noqa: E402
 from services.frontend_gate import (  # noqa: E402
@@ -190,9 +191,6 @@ async def main(page: ft.Page) -> None:
 
     def on_open_settings() -> None:
         show_snackbar(TOAST_COMING_SOON)
-
-    def on_open_explorer() -> None:
-        logger.debug("Explorador se cablea en P5", extra={"event": "flet_explorer_pending"})
 
     def on_edit() -> None:
         nonlocal editing
@@ -351,6 +349,32 @@ async def main(page: ft.Page) -> None:
         )
 
     host = ScreenHost(page, chat.control)
+
+    async def show_chat() -> None:
+        await host.show(chat.control)
+
+    def on_back() -> None:
+        page.run_task(show_chat)
+
+    def request_refresh() -> None:
+        page.run_task(refresh_all)
+
+    explorer_screen = build_explorer_screen(
+        page,
+        explorer,
+        on_back=on_back,
+        on_select=request_refresh,
+    )
+
+    async def open_explorer() -> None:
+        on_dismiss()
+        roots = explorer.roots()
+        if roots:
+            await explorer_screen.load(roots[0])
+        await host.show(explorer_screen.control)
+
+    def on_open_explorer() -> None:
+        page.run_task(open_explorer)
 
     drawer = build_drawer(
         page,

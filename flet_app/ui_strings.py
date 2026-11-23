@@ -41,6 +41,24 @@ NON_GIT_PROMPT = "Esta carpeta no es un repositorio Git. ¿Desea trabajar de tod
 NON_GIT_CONTINUE = "Continuar"
 NON_GIT_CANCEL = "Cancelar"
 
+# ---- Explorer: chrome, CRUD dialogs and CTA (EX-01 / EX-02) -----------------
+EXPLORER_TITLE = "Explorador de directorios"
+EXPLORER_BACK = "Volver al chat"
+EXPLORER_USE_FOLDER = "Usar esta carpeta"
+EXPLORER_NEW_FOLDER = "Nueva carpeta"
+EXPLORER_RENAME = "Renombrar"
+EXPLORER_DELETE = "Eliminar"
+EXPLORER_RENAME_TITLE = "Renombrar carpeta"
+EXPLORER_DELETE_TITLE = "Eliminar carpeta"
+EXPLORER_DELETE_PROMPT = '¿Eliminar la carpeta "{name}"? Solo se elimina si está vacía.'
+EXPLORER_FOLDER_NAME = "Nombre de la carpeta"
+EXPLORER_INIT_GIT = "Inicializar repositorio Git"
+EXPLORER_EMPTY = "Esta carpeta está vacía."
+EXPLORER_GIT_BADGE = "git"
+EXPLORER_CREATE = "Crear"
+EXPLORER_SAVE = "Guardar"
+CANCEL = NON_GIT_CANCEL
+
 # ---- Explorer: generic failure (EX-04 / TX-03) -----------------------------
 GENERIC_WORKDIR_ERROR = "No se pudo acceder a esta carpeta."
 RETRY = "Reintentar"
