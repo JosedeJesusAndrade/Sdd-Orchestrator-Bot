@@ -4,9 +4,12 @@
 fields. The search pill, gap badge, permissions badge and avatar are
 ``flet-ui`` concerns and deliberately absent here.
 
-``SidebarController`` drives the data with three async operations (``load``,
-``select``, ``new_chat``) and one SYNCHRONOUS, I/O-free ``toggle`` that only
-flips the cached snapshot so a drawer opens in well under 100 ms.
+``SidebarController`` drives the data with four async operations (``load``,
+``select``, ``new_chat``, ``rename``) and one SYNCHRONOUS, I/O-free ``toggle``
+that only flips the cached snapshot so a drawer opens in well under 100 ms.
+
+Titles normally come from OpenCode history; ``_overlay_stored_titles`` swaps in
+a bot-stored title when the user renamed, so a rename is actually VISIBLE.
 
 No widget or ``flet`` import lives in this module.
 """
@@ -60,6 +63,10 @@ class SessionWriterPort(Protocol):
 
     async def new_chat(self, key: ConversationKey) -> SessionInfo: ...
 
+    async def rename(
+        self, key: ConversationKey, real_id: str, title: str
+    ) -> SessionInfo | None: ...
+
 
 class WorkdirPort(Protocol):
     """The subset of ``EffectiveWorkdir`` the sidebar reads."""
@@ -73,6 +80,8 @@ class SessionStatePort(Protocol):
     async def get_active_session(self, key: ConversationKey) -> SessionInfo | None: ...
 
     async def get_model(self, key: ConversationKey) -> str: ...
+
+    async def list_sessions(self, key: ConversationKey) -> list[SessionInfo]: ...
 
 
 # ── Snapshot (exactly eight fields — F-12 / FD-03) ─────────────────────
@@ -90,6 +99,37 @@ class SidebarSnapshot:
     state: LoadState[None]
     error: SidebarFailure | None
     profile_name: str
+
+
+# ── Stored-title overlay (D2 — the rename must be VISIBLE) ─────────────
+
+
+def _overlay_stored_titles(
+    sessions: list[ConversationSummary],
+    stored: list[SessionInfo],
+) -> list[ConversationSummary]:
+    """Swap OpenCode titles for the bot-stored ones when a user renamed.
+
+    ``ConversationsService`` builds every ``ConversationSummary.title`` from
+    OpenCode history, so a rename that only touches ``sessions.json`` would
+    persist but never render. This pure UI-layer shim keeps a ``name -> title``
+    overlay and applies it to the adopted rows. A stored title equal to the
+    adopted name (a fresh ``chat-N`` whose title is its own name) is NOT
+    overlaid, so brand-new sessions keep their OpenCode title; orphans (no
+    ``adopted_name``) are untouched.
+    """
+    stored_titles = {
+        session.name: session.title for session in stored if session.real_id and session.title
+    }
+    overlaid: list[ConversationSummary] = []
+    for summary in sessions:
+        adopted = summary.adopted_name
+        stored_title = stored_titles.get(adopted) if adopted else None
+        if stored_title and stored_title != adopted:
+            overlaid.append(replace(summary, title=stored_title))
+        else:
+            overlaid.append(summary)
+    return overlaid
 
 
 # ── Controller ─────────────────────────────────────────────────────────
@@ -149,6 +189,8 @@ class SidebarController(Loadable[None]):
 
     async def _fetch(self) -> tuple[_SidebarData, LoadState[None]]:
         sessions = await self._conversations.list_conversations(self._key)
+        stored = await self._session_state.list_sessions(self._key)
+        sessions = _overlay_stored_titles(sessions, stored)
         active = await self._session_state.get_active_session(self._key)
         resolved = await self._workdir.resolve(self._key)
         model = await self._session_state.get_model(self._key)
@@ -190,6 +232,24 @@ class SidebarController(Loadable[None]):
             self._fail(exc)
             return self._snapshot
         return await self.load()
+
+    async def rename(self, real_id: str, title: str) -> bool:
+        """Persist a new title for a bot-bound session, then reload (EM-03).
+
+        The service resolves the bot name from ``real_id`` and returns ``None``
+        for an unbound/blank rename (a silent no-op, no error state). Any
+        exception publishes a typed failure. On success the reload re-applies
+        the stored-title overlay so the new title becomes visible.
+        """
+        try:
+            result = await self._session_writer.rename(self._key, real_id, title)
+        except Exception as exc:
+            self._fail(exc)
+            return False
+        if result is None:
+            return False
+        await self.load()
+        return True
 
     def toggle(self) -> SidebarSnapshot:
         """Flip ``expanded`` on the cached snapshot: sync, zero I/O (FD-05).

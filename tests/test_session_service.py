@@ -702,3 +702,77 @@ async def test_switch_delegates_and_invalidates_cache(invalidations: list[bool])
     assert session.name == "other"
     assert store.switched == [(conv(42), "other")]
     assert invalidations == [True]
+
+
+# ── rename (the additive services change, EM-03) ───────────────────────
+
+
+async def test_rename_resolves_name_from_real_id_and_persists(
+    invalidations: list[bool],
+) -> None:
+    store = FakeStore([_session("mine", "ses_1", title="chat-1")])
+
+    result = await _service(store).rename(conv(42), "ses_1", "  Mi proyecto  ")
+
+    assert result is not None
+    assert result.name == "mine"
+    assert result.real_id == "ses_1"
+    assert result.title == "Mi proyecto"
+    assert store.updated_titles == [(conv(42), "mine", "Mi proyecto")]
+    assert invalidations == []
+
+
+async def test_rename_unknown_or_unbound_id_is_a_silent_none() -> None:
+    store = FakeStore([_session("mine", "ses_1", title="chat-1"), _session("empty", None)])
+    service = _service(store)
+
+    assert await service.rename(conv(42), "ses_orphan", "Nuevo") is None
+    assert await service.rename(conv(42), "", "Nuevo") is None
+    assert store.updated_titles == []
+
+
+async def test_rename_blank_title_is_a_silent_none() -> None:
+    store = FakeStore([_session("mine", "ses_1", title="chat-1")])
+
+    assert await _service(store).rename(conv(42), "ses_1", "   ") is None
+    assert store.updated_titles == []
+
+
+async def test_rename_is_idempotent_for_the_same_title(invalidations: list[bool]) -> None:
+    store = FakeStore([_session("mine", "ses_1", title="Mi proyecto")])
+
+    result = await _service(store).rename(conv(42), "ses_1", "Mi proyecto")
+
+    assert result is not None
+    assert result.title == "Mi proyecto"
+    assert store.updated_titles == []
+    assert invalidations == []
+
+
+async def test_rename_survives_a_store_restart(tmp_path: Path) -> None:
+    path = tmp_path / "sessions.json"
+    payload = {
+        "telegram:1": {
+            "active": "chat-1",
+            "sessions": {
+                "chat-1": {
+                    "id": "ses_1",
+                    "title": "chat-1",
+                    "created": "2026-05-19T00:00:00+00:00",
+                    "last_used": None,
+                    "prompt_count": 0,
+                }
+            },
+        }
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    service = SessionService(SessionStore(path))
+    result = await service.rename(conv("telegram:1"), "ses_1", "Mi proyecto")
+
+    assert result is not None
+    assert result.title == "Mi proyecto"
+
+    restarted = SessionStore(path)  # a fresh instance is an app restart
+    sessions = await restarted.list_sessions(conv("telegram:1"))
+    assert [(s.name, s.title) for s in sessions] == [("chat-1", "Mi proyecto")]

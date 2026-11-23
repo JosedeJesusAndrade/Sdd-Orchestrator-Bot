@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -318,6 +318,35 @@ class SessionService:
         )
         invalidate_opencode_sessions_cache()
         return session
+
+    async def rename(
+        self, conversation_id: ConversationKey, real_id: str, title: str
+    ) -> SessionInfo | None:
+        """Rename a bot-bound session by its OpenCode ``real_id`` (additive).
+
+        ``SessionStore.update_session_title`` is keyed by the bot session NAME,
+        so the name is resolved from ``real_id`` through ``list_sessions``. Only
+        a session that already carries that real id is renameable; an unbound
+        ``real_id`` (orphan or unknown) and a blank title are SILENT no-ops that
+        return ``None`` — never an exception. Renaming touches neither OpenCode
+        nor the discovery cache, and re-applying the same title is a no-op.
+        """
+        sessions = await self._store.list_sessions(conversation_id)
+        target = next(
+            (session for session in sessions if session.real_id and session.real_id == real_id),
+            None,
+        )
+        if target is None:
+            return None
+
+        cleaned = title.strip()
+        if not cleaned:
+            return None
+        if cleaned == target.title:
+            return target
+
+        await self._store.update_session_title(conversation_id, target.name, cleaned)
+        return replace(target, title=cleaned)
 
     async def switch(self, conversation_id: ConversationKey, name: str) -> SessionInfo:
         """Switch the active session and invalidate the discovery cache."""

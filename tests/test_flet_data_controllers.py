@@ -53,7 +53,13 @@ _KEY: ConversationKey = conv("flet:local")
 # ── Fixtures / fakes ───────────────────────────────────────────────────
 
 
-def _summary(real_id: str, title: str = "t", *, active: bool = False) -> ConversationSummary:
+def _summary(
+    real_id: str,
+    title: str = "t",
+    *,
+    active: bool = False,
+    adopted_name: str | None = None,
+) -> ConversationSummary:
     return ConversationSummary(
         real_id=real_id,
         title=title,
@@ -63,14 +69,20 @@ def _summary(real_id: str, title: str = "t", *, active: bool = False) -> Convers
         directory="/w",
         agent="opencode",
         is_active=active,
+        adopted_name=adopted_name,
     )
 
 
-def _session(real_id: str | None = "ses_abc") -> SessionInfo:
+def _session(
+    real_id: str | None = "ses_abc",
+    *,
+    name: str = "default",
+    title: str | None = None,
+) -> SessionInfo:
     return SessionInfo(
-        name="default",
+        name=name,
         real_id=real_id,
-        title="default",
+        title=title if title is not None else name,
         created="2026-01-01T00:00:00+00:00",
         last_used=None,
         prompt_count=0,
@@ -108,10 +120,19 @@ class FakeConversations:
 class FakeSessionWriter:
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self.rename_calls: list[tuple[object, str, str]] = []
+        self.rename_result: SessionInfo | None = _session()
+        self.rename_error: Exception | None = None
 
     async def new_chat(self, key: object) -> SessionInfo:
         self.calls.append(key)
         return _session(None)
+
+    async def rename(self, key: object, real_id: str, title: str) -> SessionInfo | None:
+        self.rename_calls.append((key, real_id, title))
+        if self.rename_error is not None:
+            raise self.rename_error
+        return self.rename_result
 
 
 class FakeSessionState:
@@ -120,11 +141,14 @@ class FakeSessionState:
         *,
         model: str = "deepseek/deepseek-flash",
         active: SessionInfo | None = None,
+        stored: list[SessionInfo] | None = None,
     ) -> None:
         self.model = model
         self.active = active
+        self.stored = list(stored or [])
         self.model_calls: list[object] = []
         self.active_calls: list[object] = []
+        self.list_calls: list[object] = []
 
     async def get_model(self, key: object) -> str:
         self.model_calls.append(key)
@@ -133,6 +157,10 @@ class FakeSessionState:
     async def get_active_session(self, key: object) -> SessionInfo | None:
         self.active_calls.append(key)
         return self.active
+
+    async def list_sessions(self, key: object) -> list[SessionInfo]:
+        self.list_calls.append(key)
+        return list(self.stored)
 
 
 class FakeWorkdir:
@@ -344,6 +372,104 @@ async def test_new_chat_creates_then_reloads() -> None:
     assert writer.calls == [_KEY]
     assert len(conversations.list_calls) == 1
     assert snapshot.state == LoadReady(None)
+
+
+# ── SidebarController.rename + stored-title overlay (EM-02/EM-03) ─────
+
+
+async def test_rename_persists_and_reloads() -> None:
+    writer = FakeSessionWriter()
+    conversations = FakeConversations([_summary("ses_a")])
+    controller = _controller(conversations, writer=writer)
+    await controller.load()
+
+    ok = await controller.rename("ses_a", "Nuevo título")
+
+    assert ok is True
+    assert writer.rename_calls == [(_KEY, "ses_a", "Nuevo título")]
+    assert len(conversations.list_calls) == 2
+
+
+async def test_rename_orphan_is_a_silent_false_without_reload() -> None:
+    writer = FakeSessionWriter()
+    writer.rename_result = None
+    conversations = FakeConversations([_summary("ses_a")])
+    controller = _controller(conversations, writer=writer)
+    await controller.load()
+
+    ok = await controller.rename("ses_orphan", "Nuevo")
+
+    assert ok is False
+    assert len(conversations.list_calls) == 1
+    assert controller.snapshot.error is None
+
+
+async def test_rename_failure_publishes_a_typed_error() -> None:
+    writer = FakeSessionWriter()
+    writer.rename_error = RuntimeError("disk full")
+    controller = _controller(writer=writer)
+
+    ok = await controller.rename("ses_a", "Nuevo")
+
+    assert ok is False
+    assert isinstance(controller.snapshot.state, LoadError)
+    assert controller.snapshot.error is not None
+    assert controller.snapshot.error.kind == "unexpected"
+
+
+async def test_load_overlays_the_stored_title_over_opencode() -> None:
+    conversations = FakeConversations(
+        [_summary("ses_a", "Título de OpenCode", adopted_name="chat-2")]
+    )
+    state = FakeSessionState(stored=[_session("ses_a", name="chat-2", title="Mi proyecto")])
+    controller = _controller(conversations, state=state)
+
+    snapshot = await controller.load()
+
+    assert snapshot.sessions[0].title == "Mi proyecto"
+    assert snapshot.sessions[0].adopted_name == "chat-2"
+
+
+async def test_load_keeps_the_opencode_title_when_stored_equals_name() -> None:
+    conversations = FakeConversations(
+        [_summary("ses_a", "Título de OpenCode", adopted_name="chat-1")]
+    )
+    state = FakeSessionState(stored=[_session("ses_a", name="chat-1", title="chat-1")])
+    controller = _controller(conversations, state=state)
+
+    snapshot = await controller.load()
+
+    assert snapshot.sessions[0].title == "Título de OpenCode"
+
+
+async def test_load_does_not_overlay_orphans() -> None:
+    conversations = FakeConversations([_summary("ses_a", "Título de OpenCode")])
+    state = FakeSessionState(stored=[_session("ses_a", name="default", title="Renamed")])
+    controller = _controller(conversations, state=state)
+
+    snapshot = await controller.load()
+
+    assert snapshot.sessions[0].title == "Título de OpenCode"
+
+
+async def test_rename_is_visible_after_reload() -> None:
+    # The CRITICAL proof: OpenCode's title never changes; only the store does.
+    conversations = FakeConversations(
+        [_summary("ses_a", "Título de OpenCode", adopted_name="chat-2")]
+    )
+    state = FakeSessionState(stored=[_session("ses_a", name="chat-2", title="chat-2")])
+    writer = FakeSessionWriter()
+    writer.rename_result = _session("ses_a", name="chat-2", title="Renombrado")
+    controller = _controller(conversations, writer=writer, state=state)
+
+    await controller.load()
+    assert controller.snapshot.sessions[0].title == "Título de OpenCode"
+
+    state.stored = [_session("ses_a", name="chat-2", title="Renombrado")]
+    ok = await controller.rename("ses_a", "Renombrado")
+
+    assert ok is True
+    assert controller.snapshot.sessions[0].title == "Renombrado"
 
 
 # ── SidebarController.toggle (FD-05) ───────────────────────────────────
