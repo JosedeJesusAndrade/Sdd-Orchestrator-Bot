@@ -25,11 +25,24 @@ class Colors:
     accent: str = "#4D6BFE"
     accent_soft: str = "#A78BFA"
     surface: str = "#16161A"
+    surface_alt: str = "#101014"
+    surface_raised: str = "#1B1B21"
     outline: str = "#24242C"
     text_primary: str = "#F2F2F5"
     text_secondary: str = "#9A9AA5"
     text_muted: str = "#4A4A52"
     white: str = "#FFFFFF"
+    # Translucent black used behind modal layers (``#AARRGGBB``).
+    scrim: str = "#8C000000"
+    accent_pressed: str = "#3F58D9"
+    danger: str = "#F87171"
+    success: str = "#34D399"
+    warning: str = "#FBBF24"
+
+    @property
+    def drawer_bg(self) -> str:
+        """Drawer surface alias (single source of truth for ``#101014``)."""
+        return self.surface_alt
 
     @staticmethod
     def alpha(color: str, opacity: float) -> str:
@@ -49,16 +62,22 @@ class Typography:
     body_weight: ft.FontWeight = ft.FontWeight.W_400
     small_size: int = 12
     muted_size: int = 11
+    label_size: int = 13
+    section_size: int = 12
+    tile_title_size: int = 15
+    meta_size: int = 12
 
 
 @dataclass(frozen=True, slots=True)
 class Spacing:
     """4/8/12/16/24/32 spacing scale."""
 
+    xxs: int = 2
     xs: int = 4
     sm: int = 8
     md: int = 12
     lg: int = 16
+    gutter: int = 20
     xl: int = 24
     xxl: int = 32
 
@@ -68,8 +87,38 @@ class Radii:
     """Corner radii: pill composer, cards and small chips."""
 
     small: int = 8
+    tile: int = 12
     card: int = 18
+    panel: int = 28
     pill: int = 999
+
+
+@dataclass(frozen=True, slots=True)
+class Sizes:
+    """Fixed component dimensions (avatar, send button, chrome rows)."""
+
+    avatar: int = 32
+    send: int = 40
+    top_bar_min: int = 56
+    status_bar: int = 28
+    tile_min_height: int = 52
+
+
+@dataclass(frozen=True, slots=True)
+class Motion:
+    """Animation durations (ms) and the shared easing curve."""
+
+    fast_ms: int = 120
+    drawer_ms: int = 220
+    slow_ms: int = 300
+    welcome_ms: int = 300
+    send_ms: int = 160
+    curve: ft.AnimationCurve = ft.AnimationCurve.EASE_OUT
+
+
+#: Flet 1.0.3 exposes no OS reduced-motion API; a single constant gates the
+#: optional animations so a future platform check only has to flip this flag.
+REDUCED_MOTION: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +175,8 @@ class DesignSystem:
     typography: Typography = field(default_factory=Typography)
     spacing: Spacing = field(default_factory=Spacing)
     radii: Radii = field(default_factory=Radii)
+    sizes: Sizes = field(default_factory=Sizes)
+    motion: Motion = field(default_factory=Motion)
     gradients: Gradients = field(default_factory=Gradients)
 
 
