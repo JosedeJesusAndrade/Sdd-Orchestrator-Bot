@@ -81,15 +81,20 @@ def session_tile(
     active: bool,
     on_tap: Callable[[], None],
     edit_mode: bool = False,
+    title_ref: ft.Ref[ft.TextField] | None = None,
 ) -> ft.Control:
     """Render one session row: title, muted meta, active/adopted affordances.
 
     ``edit_mode`` swaps the title for a dense inline ``TextField`` only when the
     row is bot-bound (``adopted_name`` set); orphans stay read-only (EM-02).
+    ``title_ref`` is the drawer's handle for collecting the edited value on save;
+    ``data`` keeps the original title so the save path can skip unchanged rows.
     """
     if edit_mode and session.adopted_name is not None:
         title: ft.Control = ft.TextField(
+            ref=title_ref,
             value=session.title,
+            data=session.title,
             dense=True,
             filled=False,
             border=ft.NoInputBorder(),

@@ -40,6 +40,7 @@ from flet_app.data.explorer import ExplorerController  # noqa: E402
 from flet_app.data.model_selector import ModelSelectorController  # noqa: E402
 from flet_app.data.sidebar import SidebarController  # noqa: E402
 from flet_app.data.status_strip import StatusStripController  # noqa: E402
+from flet_app.edit_mode import EditMode, rename_failure_notice  # noqa: E402
 from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
@@ -144,7 +145,7 @@ async def main(page: ft.Page) -> None:
         workdir = str(core.effective_workdir.fallback)
 
     initial_snapshot = await sidebar.load()
-    editing = False
+    edit_mode: EditMode | None = None
 
     def show_snackbar(message: str) -> None:
         page.show_dialog(
@@ -193,11 +194,13 @@ async def main(page: ft.Page) -> None:
         show_snackbar(TOAST_COMING_SOON)
 
     def on_edit() -> None:
-        nonlocal editing
-        editing = not editing
-        chat.set_edit_mode(editing)
-        drawer.set_edit_mode(editing)
-        page.update()
+        if edit_mode is None:
+            return
+        if edit_mode.active:
+            page.run_task(edit_mode.save)
+        else:
+            edit_mode.activate()
+            page.update()
 
     async def refresh_status() -> None:
         snapshot = await status_strip.load()
@@ -386,6 +389,16 @@ async def main(page: ft.Page) -> None:
         on_open_settings=on_open_settings,
         on_edit=on_edit,
         on_search=on_search,
+    )
+
+    # P6: the pencil drives this state machine; the save path goes through
+    # ``sidebar.rename`` (the P2 data path) and a failure keeps edit mode on.
+    edit_mode = EditMode(
+        drawer=drawer,
+        rename=sidebar.rename,
+        set_pencil=chat.set_edit_mode,
+        refresh=refresh_all,
+        show_failure=lambda: rename_failure_notice(page),
     )
 
     chat.composer.bind(on_send, on_cancel=on_cancel)

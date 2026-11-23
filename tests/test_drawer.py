@@ -243,3 +243,40 @@ def test_drawer_edit_mode_renders_fields_for_bot_bound_rows() -> None:
     assert any(isinstance(c, ft.TextField) for c in _walk(drawer.sessions_view))
     drawer.set_edit_mode(False)
     assert not any(isinstance(c, ft.TextField) for c in _walk(drawer.sessions_view))
+
+
+def test_drawer_edit_mode_leaves_orphans_read_only() -> None:
+    bound = _summary(real_id="ses_1", title="Con nombre", adopted_name="chat-1")
+    orphan = _summary(real_id="ses_2", title="Sin nombre", adopted_name=None)
+    drawer, _ = _build(_snapshot(bound, orphan))
+
+    drawer.set_edit_mode(True)
+
+    fields = [c for c in _walk(drawer.sessions_view) if isinstance(c, ft.TextField)]
+    assert len(fields) == 1, "only the bot-bound row becomes editable (EM-02)"
+    assert set(drawer.edit_refs) == {"ses_1"}
+    assert "Sin nombre" in _texts(drawer.sessions_view)
+
+    drawer.set_edit_mode(False)
+    assert drawer.edit_refs == {}
+
+
+def test_drawer_collect_edits_skips_blank_and_unchanged_rows() -> None:
+    first = _summary(real_id="ses_1", title="Primera")
+    second = _summary(real_id="ses_2", title="Segunda")
+    drawer, _ = _build(_snapshot(first, second))
+
+    drawer.set_edit_mode(True)
+    assert set(drawer.edit_refs) == {"ses_1", "ses_2"}
+
+    first_field = drawer.edit_refs["ses_1"].current
+    second_field = drawer.edit_refs["ses_2"].current
+    assert first_field is not None
+    assert second_field is not None
+    first_field.value = "  Primera editada  "
+    second_field.value = "   "
+
+    assert drawer.collect_edits() == [("ses_1", "Primera editada")]
+
+    first_field.value = "Primera"
+    assert drawer.collect_edits() == []

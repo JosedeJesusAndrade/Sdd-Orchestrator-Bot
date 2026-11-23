@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import flet as ft
 
@@ -123,8 +123,14 @@ def _session_controls(
     *,
     edit_mode: bool,
     on_select: Callable[[str], None],
+    edit_refs: dict[str, ft.Ref[ft.TextField]],
 ) -> list[ft.Control]:
-    """Build the bucketed session section (headers + tiles) for ``snapshot``."""
+    """Build the bucketed session section (headers + tiles) for ``snapshot``.
+
+    While edit mode is on, every bot-bound row gets its own ``ft.Ref`` stored in
+    ``edit_refs`` (keyed by ``real_id``) so the save path can read the typed
+    value. Orphans get no field and no ref (EM-02, the UI half of the guard).
+    """
     if isinstance(snapshot.state, LoadError):
         return [_status_line(SESSIONS_ERROR)]
 
@@ -142,12 +148,17 @@ def _session_controls(
     for label, sessions in buckets:
         controls.append(section_header(label))
         for session in sessions:
+            title_ref: ft.Ref[ft.TextField] | None = None
+            if edit_mode and session.adopted_name is not None:
+                title_ref = ft.Ref[ft.TextField]()
+                edit_refs[session.real_id] = title_ref
             controls.append(
                 session_tile(
                     session,
                     active=session.real_id == snapshot.active_real_id,
                     on_tap=select_handler(session.real_id),
                     edit_mode=edit_mode,
+                    title_ref=title_ref,
                 )
             )
     return controls
@@ -166,19 +177,40 @@ class Drawer:
     on_open_settings: Callable[[], None] | None
     snapshot: SidebarSnapshot
     edit_mode: bool = False
+    edit_refs: dict[str, ft.Ref[ft.TextField]] = field(default_factory=dict)
 
     def render(self, snapshot: SidebarSnapshot) -> None:
         """Re-render only the mutable sections (sessions + footer) for a load."""
         self.snapshot = snapshot
+        self.edit_refs.clear()
         self.sessions_view.controls = _session_controls(
             snapshot,
             edit_mode=self.edit_mode,
             on_select=self.on_select,
+            edit_refs=self.edit_refs,
         )
         self.footer.content = footer_profile(
             snapshot.profile_name,
             on_tap=self.on_open_settings,
         )
+
+    def collect_edits(self) -> list[tuple[str, str]]:
+        """Return ``(real_id, new_title)`` for non-empty, changed inline fields.
+
+        The save path only persists real edits: unchanged titles and blank
+        inputs are skipped (EM-01/EM-04). A ``None`` ref means the field was
+        unmounted, so it contributes nothing.
+        """
+        edits: list[tuple[str, str]] = []
+        for real_id, ref in self.edit_refs.items():
+            title_field = ref.current
+            if title_field is None:
+                continue
+            new_title = (title_field.value or "").strip()
+            original = title_field.data if isinstance(title_field.data, str) else ""
+            if new_title and new_title != original:
+                edits.append((real_id, new_title))
+        return edits
 
     def set_edit_mode(self, editing: bool) -> None:
         """Toggle edit mode and re-render the session rows accordingly."""
