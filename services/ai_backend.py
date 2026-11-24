@@ -63,3 +63,19 @@ class AIBackend(Protocol):
     def cancel(self) -> None:
         """Cancel the current execution (if any)."""
         ...
+
+
+@runtime_checkable
+class SessionIdSinkBackend(Protocol):
+    """Optional capability: report the created session id BEFORE the turn ends.
+
+    ``PromptService`` installs a sink so the id is persisted the instant the
+    backend creates (or first learns) it — not only when ``execute`` returns.
+    Without this, a turn that is cancelled or abandoned before completion would
+    drop the id and the next prompt would start a brand-new OpenCode session.
+
+    Backends that cannot know the id early (or test doubles) simply omit
+    ``set_session_id_sink``; ``isinstance`` then skips them.
+    """
+
+    def set_session_id_sink(self, sink: Callable[[str], Awaitable[None]] | None) -> None: ...

@@ -431,3 +431,105 @@ async def test_first_prompt_bootstraps_default_and_persists_the_id(tmp_path: Pat
     assert active.name == "default"
     assert active.real_id == SID
     assert active.prompt_count == 1
+
+
+async def test_new_chat_first_prompt_persists_and_second_reuses(tmp_path: Path) -> None:
+    """DoD: new_chat → prompt 1 persists its id → prompt 2 reuses it.
+
+    The NEW ``chat-1`` starts with ``real_id=None`` (so prompt 1 creates the
+    OpenCode session), and after that first prompt the id MUST be stored on the
+    new chat so the second prompt continues it instead of creating another one.
+    """
+    store = SessionStore(tmp_path / "sessions.json")
+    session_service = SessionService(store)
+    backend = _RecordingBackend(
+        [
+            AIBackendResult(stdout="uno\n", session_id=SID),
+            AIBackendResult(stdout="dos\n", session_id=SID),
+        ]
+    )
+    service = PromptService(
+        session_store=store,
+        provider_factory=_Factory(backend),
+        session_service=session_service,
+    )
+
+    created = await session_service.new_chat(conv(1))
+    assert created.name == "chat-1" and created.real_id is None
+
+    await service.execute(conversation_id=conv(1), prompt_text="uno", view=_View())
+    active = await store.get_active_session(conv(1))
+    assert active is not None and active.name == "chat-1" and active.real_id == SID
+
+    await service.execute(conversation_id=conv(1), prompt_text="dos", view=_View())
+
+    assert backend.session_ids == [None, SID]
+
+
+async def test_cancelled_turn_still_persists_the_session_id() -> None:
+    """A cancelled turn must not drop the id it just created."""
+    store = _RecordingStore(_session(real_id=None))
+    backend = _RecordingBackend([AIBackendResult(session_id=SID, cancelled=True)])
+    service = PromptService(session_store=store, provider_factory=_Factory(backend))
+
+    await service.execute(conversation_id=conv(1), prompt_text="hola", view=_View())
+
+    assert store.updated == [(conv(1), SID)]
+
+
+class _SinkCancellingBackend:
+    """Creates a session, reports it through the sink, then is interrupted."""
+
+    supports_live_progress = False
+
+    def __init__(self) -> None:
+        self.session_ids: list[str | None] = []
+        self._sink: Any = None
+
+    def set_session_id_sink(self, sink: Any) -> None:
+        self._sink = sink
+
+    async def execute(
+        self,
+        prompt: str,
+        model: str,
+        session_id: str | None,
+        agent: str | None = None,
+        workdir: str | None = None,
+        source_label: str = "",
+        timeout: float | None = None,
+        on_progress: Any = None,
+    ) -> AIBackendResult:
+        self.session_ids.append(session_id)
+        if session_id is None and self._sink is not None:
+            await self._sink(SID)
+            raise asyncio.CancelledError
+        return AIBackendResult(stdout="ok\n", session_id=session_id)
+
+    def cancel(self) -> None:
+        return None
+
+
+async def test_session_id_persists_when_the_turn_is_interrupted_after_creation(
+    tmp_path: Path,
+) -> None:
+    """The early-persist sink survives a hard cancellation of the turn."""
+    store = SessionStore(tmp_path / "sessions.json")
+    session_service = SessionService(store)
+    backend = _SinkCancellingBackend()
+    service = PromptService(
+        session_store=store,
+        provider_factory=_Factory(cast(Any, backend)),
+        session_service=session_service,
+    )
+
+    await session_service.new_chat(conv(1))
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(conversation_id=conv(1), prompt_text="uno", view=_View())
+
+    active = await store.get_active_session(conv(1))
+    assert active is not None and active.name == "chat-1" and active.real_id == SID
+
+    await service.execute(conversation_id=conv(1), prompt_text="dos", view=_View())
+    assert backend.session_ids == [None, SID]

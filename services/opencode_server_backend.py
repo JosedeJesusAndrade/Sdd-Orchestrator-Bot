@@ -295,12 +295,35 @@ class OpenCodeServerBackend:
 
         self._cancelled = False
         self._reply_not_accepted = 0
+        self._session_id_sink: Callable[[str], Awaitable[None]] | None = None
         self._active_session_id: str | None = None
         self._active_directory: str | None = None
         self._queue: asyncio.Queue[object] | None = None
         self._pump_task: asyncio.Task[None] | None = None
         self._abort_task: asyncio.Task[None] | None = None
         self._progress: _ProgressEmitter | None = None
+
+    def set_session_id_sink(self, sink: Callable[[str], Awaitable[None]] | None) -> None:
+        """Install a callback fired the moment a new session id is known.
+
+        Persisting early is what makes a cancelled/abandoned turn recoverable:
+        the id is stored before the (possibly never-ending) stream starts.
+        """
+        self._session_id_sink = sink
+
+    async def _notify_session_created(self, sid: str) -> None:
+        """Best-effort early report of the created id; never breaks the turn."""
+        if self._session_id_sink is None:
+            return
+        try:
+            await self._session_id_sink(sid)
+        except Exception:
+            log_exception(
+                "opencode_session_id_sink_failed",
+                module=__name__,
+                level=logging.WARNING,
+                session_id=sid,
+            )
 
     async def execute(
         self,
@@ -353,6 +376,9 @@ class OpenCodeServerBackend:
             sid = session_id
             if sid is None:
                 sid = await self._create_session(prompt, directory)
+                # Persist BEFORE streaming: a cancelled/abandoned turn must not
+                # lose the id it just created.
+                await self._notify_session_created(sid)
             self._active_session_id = sid
 
             if self._cancelled:
@@ -380,6 +406,7 @@ class OpenCodeServerBackend:
                 self._abort_task = None
             self._active_session_id = None
             self._active_directory = None
+            self._session_id_sink = None
 
     async def _create_session(self, prompt: str, directory: str | None) -> str:
         """Create the session with a bounded wait (never hang silently)."""

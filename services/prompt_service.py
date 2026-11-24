@@ -241,6 +241,11 @@ class PromptService:
                 if progress_task is not None:
                     await self._stop_progress(progress_task)
 
+            # Persist the OpenCode session id BEFORE delivery: a cancelled or
+            # failed delivery must never drop it, or the next prompt would start
+            # a brand-new OpenCode session. Idempotent with the backend sink.
+            await self._persist_session_id(conversation_id, result.get("session_id"))
+
             # 4. Deliver response
             await self._deliver_response(conversation_id, result, handle, view, session)
 
@@ -324,6 +329,10 @@ class PromptService:
             )
         agent = await self._store.get_chat_setting(conversation_id, "agent", "sdd-orchestrator")
 
+        # Install the early-persist sink so the id is stored the instant the
+        # backend creates the session (a cancelled turn must not lose it).
+        self._install_session_id_sink(backend, conversation_id)
+
         # Check if cancelled during settings resolution (before subprocess)
         if conversation_id in self._cancel:
             return {
@@ -366,6 +375,26 @@ class PromptService:
             "session_id": result.session_id,
             "permission_reply_not_accepted": result.permission_reply_not_accepted,
         }
+
+    def _install_session_id_sink(
+        self, backend: AIBackend, conversation_id: ConversationKey
+    ) -> None:
+        """Wire the backend's early-persist hook when it supports one.
+
+        Backends that can report the id before the turn ends (the server and
+        the CLI) persist it through :meth:`_persist_session_id`. Doubles without
+        ``set_session_id_sink`` are left untouched, so their behavior is
+        unchanged.
+        """
+        from services.ai_backend import SessionIdSinkBackend
+
+        if not isinstance(backend, SessionIdSinkBackend):
+            return
+
+        async def sink(session_id: str) -> None:
+            await self._persist_session_id(conversation_id, session_id)
+
+        backend.set_session_id_sink(sink)
 
     # ── Internal: response delivery ─────────────────────────────────
 
@@ -462,9 +491,6 @@ class PromptService:
             # Unreachable today (non-zero exit is handled above) but keeps the
             # placeholder from sticking if that changes.
             await handle.error(strings.error_code.format(code=result["returncode"]))
-
-        # Capture session ID for new sessions
-        await self._persist_session_id(conversation_id, result.get("session_id"))
 
         # Increment prompt count
         try:

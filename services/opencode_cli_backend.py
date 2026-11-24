@@ -135,6 +135,25 @@ class OpenCodeCLIBackend:
         self._workdir = workdir
         self._timeout = timeout
         self._current_process: asyncio.subprocess.Process | None = None
+        self._session_id_sink: Callable[[str], Awaitable[None]] | None = None
+
+    def set_session_id_sink(self, sink: Callable[[str], Awaitable[None]] | None) -> None:
+        """Install a callback fired once the session id is known (end of turn)."""
+        self._session_id_sink = sink
+
+    async def _notify_session_created(self, sid: str) -> None:
+        """Best-effort early report of the id; never breaks the turn."""
+        if self._session_id_sink is None:
+            return
+        try:
+            await self._session_id_sink(sid)
+        except Exception:
+            log_exception(
+                "opencode_session_id_sink_failed",
+                module=__name__,
+                level=logging.WARNING,
+                session_id=sid,
+            )
 
     async def execute(
         self,
@@ -235,6 +254,8 @@ class OpenCodeCLIBackend:
 
             raw_stdout = stdout.decode("utf-8", errors="replace") if stdout else ""
             response_text, session_id = _parse_json_output(raw_stdout)
+            if session_id is not None:
+                await self._notify_session_created(session_id)
 
             return AIBackendResult(
                 stdout=response_text,
