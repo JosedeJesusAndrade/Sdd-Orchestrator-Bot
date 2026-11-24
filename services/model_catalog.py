@@ -6,7 +6,10 @@ never merges sources: the first source that yields a non-empty list wins.
 
 Sources, in order (MD-02):
   1. :class:`HttpProvidersSource` — ``GET /config/providers`` (fast, complete,
-     schema-filtered: ``status == "active"`` AND ``capabilities.output.text``).
+     provider- and model-filtered). Only providers the agent can actually
+     execute are kept (env-derived API-key entries and credential-less ghosts
+     are dropped); within them, models need ``status == "active"`` AND
+     ``capabilities.output.text``.
   2. :class:`CliModelsSource` — ``opencode models --verbose`` off the event
      loop via ``asyncio.to_thread``. The strict filter is best-effort here: it
      is applied only when the metadata parses (Flag #7 — the CLI has no
@@ -332,8 +335,37 @@ def _options_from_providers(payload: Mapping[str, Any]) -> list[ModelOption]:
     for provider in providers:
         if not isinstance(provider, dict):
             continue
-        options.extend(_options_from_provider(cast(dict[str, Any], provider), seen))
+        provider_data = cast(dict[str, Any], provider)
+        if not _provider_agent_executable(provider_data):
+            continue
+        options.extend(_options_from_provider(provider_data, seen))
     return options
+
+
+def _provider_agent_executable(provider: Mapping[str, Any]) -> bool:
+    """Whether the agent can actually route prompts to this provider.
+
+    ``/config/providers`` lists more than what the agent can execute: it adds
+    env-derived providers (``source == "env"``) merely because an API-key env
+    var exists — often a placeholder such as ``your_openai_key_here`` — and it
+    keeps configured providers with no usable credential. Showing those models
+    is a lie the selector must not tell.
+
+    A provider is excluded when it is env-derived, or when it declares an
+    explicitly empty ``options.apiKey`` and carries no ``key``. Absent
+    credential metadata is treated as executable (fail-open) so a minimal
+    catalog payload is never over-filtered.
+    """
+    if provider.get("source") == "env":
+        return False
+    key = provider.get("key")
+    has_key = isinstance(key, str) and bool(key)
+    options = provider.get("options")
+    if isinstance(options, dict):
+        api_key = options.get("apiKey")
+        if isinstance(api_key, str) and not api_key and not has_key:
+            return False
+    return True
 
 
 def _options_from_provider(provider: Mapping[str, Any], seen: set[str]) -> list[ModelOption]:

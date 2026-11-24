@@ -265,6 +265,80 @@ async def test_real_client_conforms_to_the_providers_client_port() -> None:
         await client.close()
 
 
+async def test_http_keeps_only_agent_executable_providers() -> None:
+    """The catalog mirrors what the agent can run, not the whole env catalog.
+
+    Shape mirrors a live ``GET /config/providers``: ``openai`` is env-derived
+    (placeholder key), ``github-copilot`` is a credential-less ghost, while
+    ``deepseek`` (config key), ``minimax`` (api key) and ``opencode``
+    (``apiKey: "public"``) are the real, executable providers.
+    """
+    payload = {
+        "providers": [
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "source": "env",
+                "env": ["OPENAI_API_KEY"],
+                "key": "your_openai_key_here",
+                "models": {
+                    "gpt-5.6-sol": _model("gpt-5.6-sol", "openai", name="GPT-5.6 Sol"),
+                    "text-embedding-3-large": _model("text-embedding-3-large", "openai"),
+                    "gpt-image-1": _model("gpt-image-1", "openai"),
+                },
+            },
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "source": "config",
+                "key": "sk-real-deepseek",
+                "models": {"deepseek-flash": _model("deepseek-flash", "deepseek")},
+            },
+            {
+                "id": "minimax",
+                "name": "MiniMax",
+                "source": "api",
+                "key": "sk-real-minimax",
+                "models": {"MiniMax-M3": _model("MiniMax-M3", "minimax")},
+            },
+            {
+                "id": "github-copilot",
+                "name": "GitHub Copilot",
+                "source": "custom",
+                "options": {"apiKey": ""},
+                "models": {"claude-opus-5.5": _model("claude-opus-5.5", "github-copilot")},
+            },
+            {
+                "id": "opencode",
+                "name": "OpenCode",
+                "source": "custom",
+                "options": {"apiKey": "public"},
+                "models": {
+                    "big-pickle": _model("big-pickle", "opencode", name="Big Pickle"),
+                    "mimo-v2.6-flash-free": _model("mimo-v2.6-flash-free", "opencode"),
+                },
+            },
+        ]
+    }
+    fake = FakeProvidersClient(payload)
+
+    options = await HttpProvidersSource(fake).fetch()
+    ids = {option.id for option in options}
+
+    # The agent's real providers stay — including every OpenCode model.
+    assert ids == {
+        "deepseek/deepseek-flash",
+        "minimax/MiniMax-M3",
+        "opencode/big-pickle",
+        "opencode/mimo-v2.6-flash-free",
+    }
+    assert "opencode/big-pickle" in ids
+    # No OpenAI (env-only, placeholder key) — not even its chat models.
+    assert not any(model_id.startswith("openai/") for model_id in ids)
+    # No credential-less ghost provider.
+    assert not any(model_id.startswith("github-copilot/") for model_id in ids)
+
+
 # ── Fallback chain ─────────────────────────────────────────────────────
 
 
