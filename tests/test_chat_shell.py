@@ -124,14 +124,51 @@ def test_chat_screen_reset_clears_turns_and_restores_the_welcome() -> None:
     chat.reveal_conversation()
 
     assert chat.greeting.opacity == 0.0
+    assert chat.greeting.ignore_interactions is True
     assert chat.background.gradient is None
 
     chat.reset()
 
     assert chat.conversation.controls == []
     assert chat.greeting.opacity == 1.0
+    assert chat.greeting.ignore_interactions is False
     assert chat.background.gradient is not None
     assert all(glow.visible for glow in chat.glows)
+
+
+def test_chat_screen_reveal_releases_gestures_to_the_conversation() -> None:
+    """W2: the hidden greeting must not swallow the chat's scroll/tap.
+
+    Flutter's ``Opacity`` keeps hit-testing at ``opacity=0``; the greeting is the
+    top child of the conversation ``Stack``, so it must set ``ignore_interactions``
+    once revealed — without turning ``visible`` off, which would kill the fade.
+    """
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=".")
+
+    assert chat.greeting.ignore_interactions is False
+    assert chat.greeting.visible is True
+
+    chat.reveal_conversation()
+
+    assert chat.greeting.ignore_interactions is True
+    assert chat.greeting.visible is True
+    assert chat.greeting.opacity == 0.0
+
+    chat.reset()
+
+    assert chat.greeting.ignore_interactions is False
+    assert chat.greeting.opacity == 1.0
+
+
+def test_conversation_column_is_the_single_scrollable() -> None:
+    """The chat scroll lives on the expanded conversation ``Column``."""
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=".")
+
+    assert chat.conversation.scroll == ft.ScrollMode.AUTO
+    assert chat.conversation.auto_scroll is True
+    assert chat.conversation.expand is True
+    assert chat.conversation_holder.expand is True
+    assert chat.conversation_holder.content is chat.conversation
 
 
 def test_chat_screen_welcome_fade_uses_the_design_token() -> None:

@@ -67,8 +67,10 @@ async def test_send_appends_to_the_attached_visible_column() -> None:
     assert chat.conversation_holder.content is chat.conversation
     assert chat.conversation_holder.visible is True
     # First message fades the welcome overlay out (CH-01); it stays mounted so
-    # the 300ms opacity animation can play.
+    # the 300ms opacity animation can play, but stops hit-testing so it no
+    # longer swallows the conversation's scroll/tap (W2).
     assert chat.greeting.opacity == 0.0
+    assert chat.greeting.ignore_interactions is True
     assert page.update_calls == 1
 
 

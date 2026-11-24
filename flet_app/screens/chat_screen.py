@@ -71,7 +71,10 @@ class ChatScreen:
         The conversation column is mounted VISIBLE from the very first frame
         (see ``build_chat_screen``); only the greeting overlay's opacity and the
         welcome gradient are toggled here. The greeting stays mounted at
-        ``opacity=0`` so the 300ms fade can actually play (CH-01/AC#8).
+        ``opacity=0`` so the 300ms fade can actually play (CH-01/AC#8). Because
+        Flutter's ``Opacity`` keeps hit-testing at 0, the greeting also sets
+        ``ignore_interactions`` so its invisible text box stops swallowing the
+        conversation's scroll/tap gestures (W2).
         """
         self._apply_welcome(False)
 
@@ -81,8 +84,15 @@ class ChatScreen:
         self._apply_welcome(True)
 
     def _apply_welcome(self, welcome: bool) -> None:
-        """Toggle the welcome overlay; opacity carries the 300ms fade."""
+        """Toggle the welcome overlay; opacity carries the 300ms fade.
+
+        ``ignore_interactions`` is flipped in lock-step with the opacity: the
+        greeting is the top child of the conversation ``Stack``, so while it is
+        hidden it must stop hit-testing or it swallows the chat's scroll/tap
+        gestures. It only affects pointer events, never the fade animation.
+        """
         self.greeting.opacity = 1.0 if welcome else 0.0
+        self.greeting.ignore_interactions = not welcome
         self.background.gradient = DS.gradients.background() if welcome else None
         for glow in self.glows:
             glow.visible = welcome
