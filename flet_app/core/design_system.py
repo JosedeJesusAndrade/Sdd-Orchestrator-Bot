@@ -95,13 +95,26 @@ class Radii:
 
 @dataclass(frozen=True, slots=True)
 class Sizes:
-    """Fixed component dimensions (avatar, send button, chrome rows)."""
+    """Fixed component dimensions (avatar, icons, chrome rows, glows)."""
 
     avatar: int = 32
     send: int = 40
     top_bar_min: int = 56
     status_bar: int = 28
     tile_min_height: int = 52
+    # Icon sizes: 18 (chevrons), 20 (pencil / composer send), 22 (chrome).
+    icon_sm: int = 18
+    icon_md: int = 20
+    icon_lg: int = 22
+    # Welcome background halo geometry (lavender top-right, blue bottom-left).
+    glow_large: int = 520
+    glow_large_inset: int = 200
+    glow_large_offset: int = 180
+    glow_large_radius: int = 260
+    glow_small: int = 420
+    glow_small_inset: int = 220
+    glow_small_offset: int = 140
+    glow_small_radius: int = 210
 
 
 @dataclass(frozen=True, slots=True)

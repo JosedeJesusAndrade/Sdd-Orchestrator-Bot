@@ -90,11 +90,10 @@ def test_top_bar_toggle_invokes_the_callback() -> None:
     assert calls == ["toggle"]
 
 
-def test_top_bar_wires_new_chat_edit_and_avatar() -> None:
+def test_top_bar_wires_new_chat_and_edit_without_an_avatar() -> None:
     calls: list[str] = []
     top_bar = build_top_bar(
         "deepseek/deepseek-flash",
-        profile_name="marie",
         on_new_chat=lambda: calls.append("new"),
         on_edit=lambda: calls.append("edit"),
     )
@@ -105,9 +104,8 @@ def test_top_bar_wires_new_chat_edit_and_avatar() -> None:
     cast(Callable[[object], None], edit.on_click)(None)
 
     assert calls == ["new", "edit"]
-    avatar = next(c for c in _walk(top_bar.control) if isinstance(c, ft.CircleAvatar))
-    assert cast(ft.Text, avatar.content).value == "M"
-    assert avatar.bgcolor == DS.colors.surface
+    # BUG #3: the avatar lives ONLY in the drawer footer, never in the header.
+    assert not any(isinstance(c, ft.CircleAvatar) for c in _walk(top_bar.control))
 
 
 def test_top_bar_edit_mode_swaps_the_pencil_icon() -> None:
@@ -125,15 +123,30 @@ def test_chat_screen_reset_clears_turns_and_restores_the_welcome() -> None:
     chat.conversation.controls.append(ft.Text("turno viejo"))
     chat.reveal_conversation()
 
-    assert chat.greeting.visible is False
+    assert chat.greeting.opacity == 0.0
     assert chat.background.gradient is None
 
     chat.reset()
 
     assert chat.conversation.controls == []
-    assert chat.greeting.visible is True
+    assert chat.greeting.opacity == 1.0
     assert chat.background.gradient is not None
     assert all(glow.visible for glow in chat.glows)
+
+
+def test_chat_screen_welcome_fade_uses_the_design_token() -> None:
+    """CH-01/AC#8: the welcome fades over ``welcome_ms`` (not instantly)."""
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=".")
+
+    animation = cast(ft.Animation, chat.greeting.animate_opacity)
+    assert animation is not None
+    assert animation.duration == DS.motion.welcome_ms == 300
+    assert animation.curve == DS.motion.curve
+
+    chat.reveal_conversation()
+    assert chat.greeting.opacity == 0.0
+    chat.reset()
+    assert chat.greeting.opacity == 1.0
 
 
 def test_chat_screen_status_degrades_to_dashes_without_a_snapshot() -> None:
@@ -144,6 +157,17 @@ def test_chat_screen_status_degrades_to_dashes_without_a_snapshot() -> None:
     assert chat.status_holder.content is not None
     texts = _texts(chat.status_holder.content)
     assert any("\u2014" in text for text in texts)
+
+
+def test_chat_screen_status_loading_is_distinct_from_degraded() -> None:
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=".")
+
+    chat.set_status(None, loading=True)
+
+    assert chat.status_holder.content is not None
+    line = next(text for text in _texts(chat.status_holder.content) if "·" in text)
+    assert "\u2026" in line
+    assert "\u2014" not in line
 
 
 def test_chat_screen_set_workdir_updates_the_caption() -> None:

@@ -83,6 +83,19 @@ def test_sizes_tokens_are_present() -> None:
     assert sizes.tile_min_height == 52
 
 
+def test_new_icon_and_glow_size_tokens_are_present() -> None:
+    sizes = DS.sizes
+    assert (sizes.icon_sm, sizes.icon_md, sizes.icon_lg) == (18, 20, 22)
+    assert sizes.glow_large == 520
+    assert sizes.glow_large_inset == 200
+    assert sizes.glow_large_offset == 180
+    assert sizes.glow_large_radius == 260
+    assert sizes.glow_small == 420
+    assert sizes.glow_small_inset == 220
+    assert sizes.glow_small_offset == 140
+    assert sizes.glow_small_radius == 210
+
+
 def test_motion_tokens_are_present() -> None:
     motion = DS.motion
     assert isinstance(motion, Motion)

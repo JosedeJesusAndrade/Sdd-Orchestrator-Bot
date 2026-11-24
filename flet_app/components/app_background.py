@@ -16,22 +16,23 @@ from flet_app.core.design_system import DS
 
 def _glows() -> list[ft.Control]:
     """The lavender (top-right) and blue (bottom-left) corner halos."""
+    sizes = DS.sizes
     return [
         ft.Container(
-            width=520,
-            height=520,
-            top=-200,
-            right=-180,
-            border_radius=260,
+            width=sizes.glow_large,
+            height=sizes.glow_large,
+            top=-sizes.glow_large_inset,
+            right=-sizes.glow_large_offset,
+            border_radius=sizes.glow_large_radius,
             gradient=DS.gradients.lavender_glow(),
             ignore_interactions=True,
         ),
         ft.Container(
-            width=420,
-            height=420,
-            bottom=-220,
-            left=-140,
-            border_radius=210,
+            width=sizes.glow_small,
+            height=sizes.glow_small,
+            bottom=-sizes.glow_small_inset,
+            left=-sizes.glow_small_offset,
+            border_radius=sizes.glow_small_radius,
             gradient=DS.gradients.blue_glow(),
             ignore_interactions=True,
         ),

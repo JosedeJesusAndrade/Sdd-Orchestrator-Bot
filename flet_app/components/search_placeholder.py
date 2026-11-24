@@ -1,11 +1,11 @@
 """Search pill with a single-pass shimmer (SH-03 / D4).
 
-The pill is visually complete but inert this slice: the tap is a plain
-``on_tap()`` callback (the wiring shows the ``Próximamente`` toast in P4). The
-shimmer is one sweep per drawer open — :meth:`SearchPlaceholder.sweep` starts it
-exactly once (and is a no-op under ``REDUCED_MOTION``), and
-:meth:`SearchPlaceholder.reset` re-arms it for the next open. No timer, no
-background task, zero I/O.
+The tap is a plain ``on_tap()`` callback (the shell shows the ``Próximamente``
+toast). The shimmer is one sweep per drawer open — the shell calls
+:meth:`SearchPlaceholder.sweep` on open (via ``Drawer.begin_shimmer``), which
+starts it exactly once (and is a no-op under ``REDUCED_MOTION``), and
+:meth:`SearchPlaceholder.reset` re-arms it on dismiss for the next open. No
+timer, no background task, zero I/O.
 """
 
 from __future__ import annotations

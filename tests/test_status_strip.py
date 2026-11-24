@@ -78,6 +78,19 @@ def test_status_strip_degrades_to_dashes_on_none() -> None:
     assert line == "\u2014 · \u2014 · \u2014 · \u2014"
 
 
+def test_status_strip_loading_is_distinct_from_degraded() -> None:
+    """SS-02/AC#6: loading shows the ``…`` skeleton, never the ``—`` dashes."""
+    control = cast(ft.Container, status_strip(None, on_refresh=lambda: None, loading=True))
+
+    texts = [c.value for c in _walk(control) if isinstance(c, ft.Text)]
+    line = next(text for text in texts if text and "·" in text)
+    assert line == "\u2026 · \u2026 · \u2026 · \u2026"
+    assert "\u2014" not in line
+
+    line_text = next(c for c in _walk(control) if isinstance(c, ft.Text) and c.value == line)
+    assert line_text.color == DS.colors.text_muted
+
+
 def test_status_strip_empty_fields_become_dashes() -> None:
     control = cast(
         ft.Container,

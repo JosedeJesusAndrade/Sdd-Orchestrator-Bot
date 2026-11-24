@@ -65,10 +65,16 @@ def _option_row(
     icon: ft.IconData,
     label: str,
     on_tap: Callable[[], None] | None,
+    *,
+    muted: bool = False,
 ) -> ft.Control:
-    """One drawer option. ``on_tap=None`` renders an inert, muted row."""
+    """One drawer option.
+
+    ``on_tap=None`` renders an inert row. ``muted=True`` keeps the muted
+    "disabled" look while still wiring the tap (``Ajustes`` -> ``Próximamente``).
+    """
     enabled = on_tap is not None
-    color = DS.colors.text_primary if enabled else DS.colors.text_muted
+    color = DS.colors.text_muted if muted or not enabled else DS.colors.text_primary
 
     def handle_tap(_: ft.Event[ft.Container]) -> None:
         if on_tap is not None:
@@ -97,7 +103,7 @@ def _option_row(
         border_radius=DS.radii.tile,
         ink=enabled,
         on_click=handle_tap if enabled else None,
-        tooltip=None if enabled else TOAST_COMING_SOON,
+        tooltip=TOAST_COMING_SOON if muted or not enabled else None,
     )
 
 
@@ -217,6 +223,15 @@ class Drawer:
         self.edit_mode = editing
         self.render(self.snapshot)
 
+    def begin_shimmer(self) -> None:
+        """Re-arm and play exactly one search shimmer pass for this open (D4)."""
+        self.search.reset()
+        self.search.sweep()
+
+    def end_shimmer(self) -> None:
+        """Re-arm the shimmer so the next open sweeps once more."""
+        self.search.reset()
+
     def set_width(self, width: float) -> None:
         """Track ``page.width`` on resize (100%-wide drawer, SH-01)."""
         self.control.width = width
@@ -235,7 +250,6 @@ def build_drawer(
     on_new_chat: Callable[[], None],
     on_open_explorer: Callable[[], None],
     on_open_settings: Callable[[], None] | None,
-    on_edit: Callable[[], None],
     on_search: Callable[[], None] | None = None,
 ) -> Drawer:
     """Build the page-level drawer for ``snapshot`` (once; re-render on load)."""
@@ -248,7 +262,7 @@ def build_drawer(
         controls=[
             _option_row(ft.Icons.ADD, OPTION_NEW_CHAT, on_new_chat),
             _option_row(ft.Icons.FOLDER_OPEN, OPTION_EXPLORER, on_open_explorer),
-            _option_row(ft.Icons.SETTINGS, OPTION_SETTINGS, None),
+            _option_row(ft.Icons.SETTINGS, OPTION_SETTINGS, on_open_settings, muted=True),
         ],
         spacing=DS.spacing.xxs,
     )
@@ -313,11 +327,8 @@ def build_drawer(
         snapshot=snapshot,
     )
     drawer.render(snapshot)
-    # ``on_edit`` is consumed by P4's edit-mode wiring (top-bar pencil); the
-    # drawer only needs to expose ``set_edit_mode`` here, so it stays accepted
-    # but unused until then.
     return drawer
 
 
 def _noop() -> None:
-    """Inert search tap until P4 wires the ``Próximamente`` toast."""
+    """Inert search tap used when the shell passes no ``on_search``."""

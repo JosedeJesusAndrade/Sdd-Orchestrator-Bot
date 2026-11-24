@@ -1,6 +1,6 @@
 """Orthogonality gates for the P3 components (token-only + no services).
 
-Scans the seven new component modules and asserts they:
+Scans the component modules (including ``app_background``) and asserts they:
 
 1. contain no hardcoded ``#RRGGBB`` colour literals (DS-02 token-only), and
 2. import no ``services`` module at runtime — the only service references are
@@ -24,6 +24,7 @@ _COMPONENTS = (
     "status_strip.py",
     "model_picker.py",
     "drawer.py",
+    "app_background.py",
 )
 
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{3,8}\b")

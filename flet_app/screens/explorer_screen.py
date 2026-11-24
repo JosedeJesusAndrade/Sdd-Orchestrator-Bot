@@ -497,7 +497,7 @@ class ExplorerScreen:
                     ft.IconButton(
                         icon=ft.Icons.ARROW_BACK,
                         icon_color=DS.colors.text_primary,
-                        icon_size=22,
+                        icon_size=DS.sizes.icon_lg,
                         tooltip=EXPLORER_BACK,
                         on_click=self._handle_back,
                     ),

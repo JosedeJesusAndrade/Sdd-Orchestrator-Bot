@@ -183,9 +183,16 @@ async def main(page: ft.Page) -> None:
             logger.debug("Drawer no disponible", extra={"event": "flet_drawer_close_failed"})
 
     def set_drawer_open(open_: bool) -> None:
-        """Sync ``expanded`` then reveal/hide the drawer (one sync toggle)."""
+        """Sync ``expanded``, play/re-arm the shimmer, then reveal/hide."""
         if sidebar.snapshot.expanded != open_:
             sidebar.toggle()
+        # D4: exactly one shimmer sweep per open; re-arm on dismiss so the next
+        # open sweeps once more. No timer, no background task.
+        if open_:
+            drawer.begin_shimmer()
+        else:
+            drawer.end_shimmer()
+        page.update()
         page.run_task(open_drawer if open_ else close_drawer)
 
     def on_open() -> None:
@@ -215,6 +222,9 @@ async def main(page: ft.Page) -> None:
         page.run_task(refresh_all)
 
     async def refresh_all() -> None:
+        # Show the distinct "loading" strip while the loads are in flight.
+        chat.set_status(None, loading=True)
+        page.update()
         snapshot = await sidebar.load()
         drawer.render(snapshot)
         if snapshot.model:
@@ -232,6 +242,8 @@ async def main(page: ft.Page) -> None:
         full :func:`refresh_all` (which re-queries the agent history) would be
         wasteful; render the cached snapshot and reload the status strip only.
         """
+        chat.set_status(None, loading=True)
+        page.update()
         snapshot = sidebar.snapshot
         drawer.render(snapshot)
         if snapshot.model:
@@ -348,7 +360,6 @@ async def main(page: ft.Page) -> None:
     chat = build_chat_screen(
         model=model,
         workdir=workdir,
-        profile_name=initial_snapshot.profile_name,
         on_toggle=on_open,
         on_open_model=on_pick_model,
         on_new_chat=on_new_chat,
@@ -418,7 +429,6 @@ async def main(page: ft.Page) -> None:
         on_new_chat=on_new_chat,
         on_open_explorer=on_open_explorer,
         on_open_settings=on_open_settings,
-        on_edit=on_edit,
         on_search=on_search,
     )
 

@@ -68,7 +68,7 @@ class Composer:
         self.running = running
         self.icon_switcher.content = ft.Icon(
             ft.Icons.STOP_CIRCLE if running else ft.Icons.ARROW_UPWARD,
-            size=20,
+            size=DS.sizes.icon_md,
             color=DS.colors.white,
         )
         self.send_button.bgcolor = DS.colors.danger if running else DS.colors.accent
@@ -120,7 +120,7 @@ def build_composer(*, workdir: str) -> Composer:
     )
 
     icon_switcher = ft.AnimatedSwitcher(
-        content=ft.Icon(ft.Icons.ARROW_UPWARD, size=20, color=DS.colors.white),
+        content=ft.Icon(ft.Icons.ARROW_UPWARD, size=DS.sizes.icon_md, color=DS.colors.white),
         duration=DS.motion.send_ms,
         switch_in_curve=DS.motion.curve,
         switch_out_curve=DS.motion.curve,
@@ -151,14 +151,14 @@ def build_composer(*, workdir: str) -> Composer:
                 ft.IconButton(
                     icon=ft.Icons.ADD,
                     icon_color=DS.colors.text_secondary,
-                    icon_size=22,
+                    icon_size=DS.sizes.icon_lg,
                     tooltip="Adjuntar (próximamente)",
                 ),
                 field,
                 ft.IconButton(
                     icon=ft.Icons.MIC,
                     icon_color=DS.colors.text_secondary,
-                    icon_size=22,
+                    icon_size=DS.sizes.icon_lg,
                     tooltip="Voz (próximamente)",
                 ),
                 send_button,

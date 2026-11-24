@@ -99,7 +99,6 @@ def _build(snapshot: SidebarSnapshot, page: FakePage | None = None) -> tuple[Dra
         on_new_chat=lambda: None,
         on_open_explorer=lambda: None,
         on_open_settings=lambda: None,
-        on_edit=lambda: None,
     )
     return drawer, page
 
@@ -127,7 +126,7 @@ def test_drawer_height_is_pinned_to_page_height() -> None:
     assert drawer.control.width == 500
 
 
-# ── <100ms guards (SH-05 / FD-05) ──────────────────────────────────────
+# â”€â”€ <100ms guards (SH-05 / FD-05) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_drawer_sessions_are_virtualized_in_a_listview() -> None:
@@ -167,6 +166,24 @@ def test_drawer_follows_a_window_resize() -> None:
     assert drawer.content.height == 720
 
 
+def test_drawer_shimmer_sweeps_once_per_open_and_rearms_on_dismiss() -> None:
+    """W1/D4: the shell drives one sweep on open and re-arms it on dismiss."""
+    drawer, _ = _build(_snapshot(_summary()))
+
+    assert drawer.search.played is False
+    drawer.begin_shimmer()
+    assert drawer.search.played is True
+    assert drawer.search.shimmer.animate_offset is not None
+    swept = drawer.search.shimmer.offset
+
+    drawer.begin_shimmer()
+    assert drawer.search.shimmer.offset == swept
+
+    drawer.end_shimmer()
+    assert drawer.search.played is False
+    assert drawer.search.shimmer.animate_offset is None
+
+
 def test_drawer_zone_order_and_24px_gap() -> None:
     drawer, _ = _build(_snapshot(_summary()))
 
@@ -185,7 +202,7 @@ def test_drawer_zone_order_and_24px_gap() -> None:
     assert search is drawer.search.control
 
 
-def test_drawer_options_are_new_chat_explorer_and_inert_settings() -> None:
+def test_drawer_options_wire_new_chat_explorer_and_settings_toast() -> None:
     calls: list[str] = []
     drawer = build_drawer(
         cast(ft.Page, FakePage()),
@@ -195,7 +212,6 @@ def test_drawer_options_are_new_chat_explorer_and_inert_settings() -> None:
         on_new_chat=lambda: calls.append("new"),
         on_open_explorer=lambda: calls.append("explorer"),
         on_open_settings=lambda: calls.append("settings"),
-        on_edit=lambda: None,
     )
 
     column = cast(ft.Column, drawer.content.content)
@@ -207,11 +223,38 @@ def test_drawer_options_are_new_chat_explorer_and_inert_settings() -> None:
     assert _texts(new_chat) == ["Nuevo chat"]
     assert _texts(explorer) == ["Explorador de directorios"]
     assert _texts(settings) == ["Ajustes"]
-    assert cast(ft.Container, settings).on_click is None
+    # W5: Ajustes keeps the muted "disabled" look but its tap must NOT be silent.
+    settings_label = next(
+        c for c in _walk(settings) if isinstance(c, ft.Text) and c.value == "Ajustes"
+    )
+    assert settings_label.color == DS.colors.text_muted
+    assert cast(ft.Container, settings).on_click is not None
 
     cast(Callable[[object], None], cast(ft.Container, new_chat).on_click)(None)
     cast(Callable[[object], None], cast(ft.Container, explorer).on_click)(None)
-    assert calls == ["new", "explorer"]
+    cast(Callable[[object], None], cast(ft.Container, settings).on_click)(None)
+    assert calls == ["new", "explorer", "settings"]
+
+
+def test_drawer_settings_is_inert_without_a_callback() -> None:
+    calls: list[str] = []
+    drawer = build_drawer(
+        cast(ft.Page, FakePage()),
+        _snapshot(_summary()),
+        on_toggle=lambda: None,
+        on_select=lambda _rid: None,
+        on_new_chat=lambda: calls.append("new"),
+        on_open_explorer=lambda: calls.append("explorer"),
+        on_open_settings=None,
+    )
+
+    column = cast(ft.Column, drawer.content.content)
+    header = cast(ft.Container, column.controls[0])
+    options = cast(ft.Column, cast(ft.Column, header.content).controls[0])
+    _, _, settings = options.controls
+
+    assert cast(ft.Container, settings).on_click is None
+    assert cast(ft.Container, settings).tooltip == "Próximamente"
 
 
 def test_drawer_dismiss_calls_toggle_once() -> None:
@@ -224,7 +267,6 @@ def test_drawer_dismiss_calls_toggle_once() -> None:
         on_new_chat=lambda: None,
         on_open_explorer=lambda: None,
         on_open_settings=lambda: None,
-        on_edit=lambda: None,
     )
 
     cast(Callable[[object], None], drawer.control.on_dismiss)(None)
@@ -242,7 +284,6 @@ def test_drawer_session_tap_selects_the_real_id() -> None:
         on_new_chat=lambda: None,
         on_open_explorer=lambda: None,
         on_open_settings=lambda: None,
-        on_edit=lambda: None,
     )
 
     tile = next(

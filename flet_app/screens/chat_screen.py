@@ -19,7 +19,7 @@ from flet_app.components.composer import Composer, build_composer
 from flet_app.components.greeting import build_greeting
 from flet_app.components.status_strip import status_strip
 from flet_app.components.top_bar import TopBar, build_top_bar
-from flet_app.core.design_system import DS
+from flet_app.core.design_system import DS, REDUCED_MOTION
 
 if TYPE_CHECKING:
     from services.status_service import StatusSnapshot
@@ -50,30 +50,39 @@ class ChatScreen:
     def set_workdir(self, workdir: str) -> None:
         self.composer.set_workdir(workdir)
 
-    def set_status(self, snapshot: StatusSnapshot | None) -> None:
-        """Re-render the thin status row for ``snapshot`` (``None`` degrades)."""
-        self.status_holder.content = status_strip(snapshot, on_refresh=self.status_refresh)
+    def set_status(self, snapshot: StatusSnapshot | None, *, loading: bool = False) -> None:
+        """Re-render the thin status row for ``snapshot``.
+
+        ``loading`` shows the ``…`` skeleton; without it a ``None`` snapshot
+        degrades to the all-dash row (SS-02).
+        """
+        self.status_holder.content = status_strip(
+            snapshot,
+            on_refresh=self.status_refresh,
+            loading=loading,
+        )
 
     def set_edit_mode(self, editing: bool) -> None:
         self.top_bar.set_edit_mode(editing)
 
     def reveal_conversation(self) -> None:
-        """Hide the greeting overlay and drop the gradient on the first message.
+        """Fade the greeting out and drop the gradient on the first message.
 
         The conversation column is mounted VISIBLE from the very first frame
-        (see ``build_chat_screen``); only the greeting overlay and the welcome
-        gradient are toggled here.
+        (see ``build_chat_screen``); only the greeting overlay's opacity and the
+        welcome gradient are toggled here. The greeting stays mounted at
+        ``opacity=0`` so the 300ms fade can actually play (CH-01/AC#8).
         """
-        self.greeting.visible = False
         self._apply_welcome(False)
 
     def reset(self) -> None:
-        """Clear the view for a new chat / session switch (CH-03)."""
+        """Clear the view and fade the welcome back in (CH-03)."""
         self.conversation.controls.clear()
-        self.greeting.visible = True
         self._apply_welcome(True)
 
     def _apply_welcome(self, welcome: bool) -> None:
+        """Toggle the welcome overlay; opacity carries the 300ms fade."""
+        self.greeting.opacity = 1.0 if welcome else 0.0
         self.background.gradient = DS.gradients.background() if welcome else None
         for glow in self.glows:
             glow.visible = welcome
@@ -83,7 +92,6 @@ def build_chat_screen(
     *,
     model: str,
     workdir: str,
-    profile_name: str | None = None,
     on_toggle: Callable[[], None] | None = None,
     on_open_model: Callable[[], None] | None = None,
     on_new_chat: Callable[[], None] | None = None,
@@ -93,13 +101,15 @@ def build_chat_screen(
     """Build the chat screen (A8: optional callbacks, keyword-only)."""
     top_bar = build_top_bar(
         model,
-        profile_name=profile_name,
         on_toggle=on_toggle,
         on_open_model=on_open_model,
         on_new_chat=on_new_chat,
         on_edit=on_edit,
     )
     greeting = build_greeting()
+    greeting.animate_opacity = (
+        None if REDUCED_MOTION else ft.Animation(DS.motion.welcome_ms, DS.motion.curve)
+    )
     composer = build_composer(workdir=workdir)
     status_refresh = on_refresh_status if on_refresh_status is not None else _noop
     status_holder = ft.Container(

@@ -1,8 +1,9 @@
-"""Top bar molecule: drawer toggle, model picker, new chat, edit and avatar.
+"""Top bar molecule: drawer toggle, model picker, new chat and edit.
 
-Pure presentational: it renders the five header controls and forwards each tap
-to a callback. No service is called here; the model label and the pencil icon
-(which reflects edit mode) are the only mutable pieces.
+Pure presentational: it renders the four header controls and forwards each tap
+to a callback. The user avatar lives ONLY in the drawer footer. No service is
+called here; the model label and the pencil icon (which reflects edit mode) are
+the only mutable pieces.
 """
 
 from __future__ import annotations
@@ -29,12 +30,6 @@ def model_display_name(model: str) -> str:
     return tail.title() if tail else model
 
 
-def _initial(profile_name: str | None) -> str:
-    """First letter of the profile name for the avatar, or ``?``."""
-    name = (profile_name or "").strip()
-    return name[:1].upper() if name else "?"
-
-
 @dataclass
 class TopBar:
     """The assembled bar plus the mutable model label and pencil button."""
@@ -55,7 +50,6 @@ class TopBar:
 def build_top_bar(
     model: str,
     *,
-    profile_name: str | None = None,
     on_toggle: Callable[[], None] | None = None,
     on_open_model: Callable[[], None] | None = None,
     on_new_chat: Callable[[], None] | None = None,
@@ -79,7 +73,7 @@ def build_top_bar(
                 model_text,
                 ft.Icon(
                     ft.Icons.EXPAND_MORE,
-                    size=18,
+                    size=DS.sizes.icon_sm,
                     color=DS.colors.text_secondary,
                 ),
             ],
@@ -105,18 +99,10 @@ def build_top_bar(
         if on_edit is not None:
             on_edit()
 
-    profile_avatar = ft.CircleAvatar(
-        radius=DS.sizes.avatar / 2,
-        bgcolor=DS.colors.surface,
-        color=DS.colors.text_primary,
-        tooltip="Perfil",
-        content=ft.Text(value=_initial(profile_name)),
-    )
-
     edit_button = ft.IconButton(
         icon=ft.Icons.EDIT,
         icon_color=DS.colors.text_primary,
-        icon_size=20,
+        icon_size=DS.sizes.icon_md,
         tooltip="Renombrar sesiones",
         disabled=on_edit is None,
         on_click=handle_edit,
@@ -127,7 +113,7 @@ def build_top_bar(
             ft.IconButton(
                 icon=ft.Icons.MENU,
                 icon_color=DS.colors.text_primary,
-                icon_size=22,
+                icon_size=DS.sizes.icon_lg,
                 tooltip="Sesiones",
                 disabled=on_toggle is None,
                 on_click=handle_toggle,
@@ -137,13 +123,12 @@ def build_top_bar(
             ft.IconButton(
                 icon=ft.Icons.ADD_COMMENT,
                 icon_color=DS.colors.text_primary,
-                icon_size=20,
+                icon_size=DS.sizes.icon_md,
                 tooltip="Nuevo chat",
                 disabled=on_new_chat is None,
                 on_click=handle_new_chat,
             ),
             edit_button,
-            profile_avatar,
         ],
         spacing=DS.spacing.sm,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,

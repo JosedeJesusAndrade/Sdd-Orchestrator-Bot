@@ -1,9 +1,10 @@
 """Thin status strip: workdir · branch · model · uptime + refresh (SS-01..SS-03).
 
-Pure presentational row. It renders the loaded ``StatusSnapshot`` (or an
-all-dashes row when ``None``/degraded), never polls, and only invokes the
-``on_refresh`` callback. The ``LoadState`` is the caller's concern: P4 passes a
-``None`` snapshot on a failure so the strip degrades to ``—``.
+Pure presentational row. It renders the loaded ``StatusSnapshot``, an
+all-ellipsis row while ``loading`` is on, or an all-dashes row when
+``None``/degraded. It never polls and only invokes the ``on_refresh`` callback.
+The ``LoadState`` is the caller's concern: the shell passes ``loading=True``
+while fetching and a ``None`` snapshot on a failure so the strip degrades.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     from services.status_service import StatusSnapshot
 
 _DASH = "\u2014"
+_LOADING = "\u2026"
 
 
 def format_uptime(seconds: int | None) -> str:
@@ -54,9 +56,15 @@ def status_strip(
     snapshot: StatusSnapshot | None,
     *,
     on_refresh: Callable[[], None],
+    loading: bool = False,
 ) -> ft.Control:
-    """Render the four status fields plus a refresh button in one thin row."""
-    if snapshot is None:
+    """Render the four status fields plus a refresh button in one thin row.
+
+    ``loading`` shows the ``…`` skeleton (distinct from the ``—`` degradation).
+    """
+    if loading:
+        parts = [_LOADING, _LOADING, _LOADING, _LOADING]
+    elif snapshot is None:
         parts = [_DASH, _DASH, _DASH, _DASH]
     else:
         parts = [
@@ -77,7 +85,7 @@ def status_strip(
                 ft.Text(
                     value=" · ".join(parts),
                     size=DS.typography.muted_size,
-                    color=DS.colors.text_secondary,
+                    color=DS.colors.text_muted if loading else DS.colors.text_secondary,
                     max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS,
                     expand=True,
