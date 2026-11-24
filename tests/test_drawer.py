@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable, Iterator
 from typing import cast
@@ -101,6 +102,47 @@ def _build(snapshot: SidebarSnapshot, page: FakePage | None = None) -> tuple[Dra
         on_open_settings=lambda: None,
     )
     return drawer, page
+
+
+def test_build_drawer_signature_matches_the_main_call() -> None:
+    """Regression: main.py's call and the signature must stay in sync.
+
+    The dead ``on_edit`` kwarg used to be required here even though the shell
+    (main.py) had stopped passing it, so every session died with
+    ``build_drawer() missing 1 required keyword-only argument: 'on_edit'``.
+    The pencil drives ``EditMode`` via the top bar, never through the drawer.
+    """
+    params = inspect.signature(build_drawer).parameters
+    required = {
+        name
+        for name, param in params.items()
+        if param.kind is inspect.Parameter.KEYWORD_ONLY and param.default is inspect.Parameter.empty
+    }
+
+    assert required == {
+        "on_toggle",
+        "on_select",
+        "on_new_chat",
+        "on_open_explorer",
+        "on_open_settings",
+    }
+    assert "on_edit" not in params
+    assert params["on_search"].default is None
+
+
+def test_build_drawer_accepts_the_exact_kwargs_main_passes() -> None:
+    drawer = build_drawer(
+        cast(ft.Page, FakePage()),
+        _snapshot(_summary()),
+        on_toggle=lambda: None,
+        on_select=lambda _rid: None,
+        on_new_chat=lambda: None,
+        on_open_explorer=lambda: None,
+        on_open_settings=lambda: None,
+        on_search=lambda: None,
+    )
+
+    assert isinstance(drawer.control, ft.NavigationDrawer)
 
 
 def test_build_drawer_is_navigation_drawer_at_page_width() -> None:
