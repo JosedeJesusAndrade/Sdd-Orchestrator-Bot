@@ -128,7 +128,7 @@ def build_chat_screen(
 
     conversation = ft.Column(
         controls=[],
-        spacing=DS.spacing.md,
+        spacing=DS.spacing.chat_turn_gap,
         scroll=ft.ScrollMode.AUTO,
         auto_scroll=True,
         expand=True,

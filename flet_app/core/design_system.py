@@ -38,6 +38,19 @@ class Colors:
     danger: str = "#F87171"
     success: str = "#34D399"
     warning: str = "#FBBF24"
+    text_body: str = "#E8E8ED"
+    code_bg: str = "#101014"
+    code_border: str = "#24242C"
+    code_block_text: str = "#DADAE2"
+    code_inline_bg: str = "#24242C"
+    code_inline_text: str = "#E6E6EB"
+    table_border: str = "#2E2E38"
+    table_body_text: str = "#E4E4E9"
+    blockquote_bg: str = "#141418"
+    blockquote_bar: str = "#A78BFA"
+    blockquote_text: str = "#C6C6D0"
+    link: str = "#7C93FF"
+    hr: str = "#2A2A33"
 
     @property
     def drawer_bg(self) -> str:
@@ -66,6 +79,21 @@ class Typography:
     section_size: int = 12
     tile_title_size: int = 15
     meta_size: int = 12
+    chat_body_size: int = 15
+    chat_line_height: float = 1.6
+    chat_h1_size: int = 20
+    chat_h2_size: int = 17
+    chat_h3_size: int = 15
+    chat_h4_size: int = 14
+    chat_h5_size: int = 13
+    chat_h6_size: int = 12
+    chat_heading_weight: ft.FontWeight = ft.FontWeight.W_600
+    chat_strong_weight: ft.FontWeight = ft.FontWeight.W_600
+    chat_code_size: int = 13
+    chat_inline_code_size: int = 13
+    chat_table_size: float = 13.5
+    chat_table_header_size: int = 13
+    chat_quote_size: int = 15
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +108,10 @@ class Spacing:
     gutter: int = 20
     xl: int = 24
     xxl: int = 32
+    chat_turn_gap: int = 24
+    chat_block_gap: int = 12
+    chat_user_pad_x: int = 14
+    chat_user_pad_y: int = 10
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from typing import cast
 
 import flet as ft
 
+from flet_app.components.message_bubble import assistant_message
 from flet_app.components.top_bar import build_top_bar
 from flet_app.core.design_system import DS
 from flet_app.flet_chat_view import render_history
@@ -169,6 +170,24 @@ def test_conversation_column_is_the_single_scrollable() -> None:
     assert chat.conversation.expand is True
     assert chat.conversation_holder.expand is True
     assert chat.conversation_holder.content is chat.conversation
+
+
+def test_conversation_uses_the_chat_turn_gap() -> None:
+    """The between-turns gap comes from ``chat_turn_gap`` (24px)."""
+    chat = build_chat_screen(model="deepseek/deepseek-flash", workdir=".")
+
+    assert chat.conversation.spacing == DS.spacing.chat_turn_gap == 24
+
+
+def test_assistant_turn_has_zero_vertical_padding() -> None:
+    """The turn gap now owns the rhythm: the assistant adds no y-padding."""
+    container = assistant_message(ft.Text("hola"))
+
+    assert isinstance(container, ft.Container)
+    padding = container.padding
+    assert isinstance(padding, ft.Padding)
+    assert padding.top == 0
+    assert padding.bottom == 0
 
 
 def test_chat_screen_welcome_fade_uses_the_design_token() -> None:

@@ -115,3 +115,51 @@ def test_colors_alpha_still_works_and_drawer_alias_is_read_only() -> None:
     rgba = Colors.alpha(DS.colors.accent, 0.5)
     assert rgba.startswith("#")
     assert Colors() == DS.colors
+
+
+def test_chat_color_tokens_are_present() -> None:
+    colors = DS.colors
+    assert colors.text_body == "#E8E8ED"
+    assert colors.code_bg == "#101014"
+    assert colors.code_border == "#24242C"
+    assert colors.code_block_text == "#DADAE2"
+    assert colors.code_inline_bg == "#24242C"
+    assert colors.code_inline_text == "#E6E6EB"
+    assert colors.table_border == "#2E2E38"
+    assert colors.table_body_text == "#E4E4E9"
+    assert colors.blockquote_bg == "#141418"
+    assert colors.blockquote_bar == "#A78BFA"
+    assert colors.blockquote_text == "#C6C6D0"
+    assert colors.link == "#7C93FF"
+    assert colors.hr == "#2A2A33"
+
+
+def test_chat_typography_tokens_are_present() -> None:
+    typo = DS.typography
+    assert typo.chat_body_size == 15
+    assert typo.chat_line_height == 1.6
+    assert typo.chat_h1_size == 20
+    assert typo.chat_h2_size == 17
+    assert typo.chat_h3_size == 15
+    assert typo.chat_h4_size == 14
+    assert typo.chat_h5_size == 13
+    assert typo.chat_h6_size == 12
+    assert typo.chat_heading_weight == ft.FontWeight.W_600
+    assert typo.chat_strong_weight == ft.FontWeight.W_600
+    assert typo.chat_code_size == 13
+    assert typo.chat_inline_code_size == 13
+    assert typo.chat_table_size == 13.5
+    assert typo.chat_table_header_size == 13
+    assert typo.chat_quote_size == 15
+
+
+def test_chat_spacing_tokens_are_present() -> None:
+    spacing = DS.spacing
+    assert spacing.chat_turn_gap == 24
+    assert spacing.chat_block_gap == 12
+    assert (spacing.chat_user_pad_x, spacing.chat_user_pad_y) == (14, 10)
+
+
+def test_existing_body_size_is_untouched_by_the_chat_scale() -> None:
+    assert DS.typography.body_size == 14
+    assert DS.typography.body_size != DS.typography.chat_body_size
