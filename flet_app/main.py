@@ -302,8 +302,9 @@ async def main(page: ft.Page) -> None:
         core.prompt_service.cancel(CONVERSATION_ID)
 
     async def select_session(real_id: str) -> None:
-        # The switcher returns ``None`` for the ALREADY active session: only
-        # close the drawer, no reload (the user's "way back to the chat").
+        # The switcher returns ``None`` only for the session the chat is ALREADY
+        # showing: just close the drawer, no reload (the user's "way back"). At
+        # startup the newest is active but not loaded, so its tap loads it.
         try:
             result = await switcher.switch(real_id)
         except Exception:
@@ -330,6 +331,7 @@ async def main(page: ft.Page) -> None:
         view.reset()
         chat.reset()
         switcher.invalidate()
+        switcher.reset_current()
         await refresh_all()
         on_dismiss()
 

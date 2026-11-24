@@ -68,16 +68,63 @@ class FakeHistory:
         return [Message(id=f"{real_id}-1", role="user", text="hola", timestamp=1)]
 
 
-async def test_tapping_the_active_session_returns_none_and_touches_nothing() -> None:
+async def test_tapping_the_active_session_at_startup_loads_it() -> None:
+    """At startup the newest is active but the chat shows the welcome.
+
+    The first tap must LOAD it (a fresh switcher has no loaded session, so the
+    active one is NOT the loaded one); only the SECOND tap — now that the chat
+    is showing it — skips with zero reload (BUG #2 preserved).
+    """
+    sidebar = FakeSidebar("ses_newest", sessions=(_summary("ses_newest", active=True),))
+    history = FakeHistory()
+    switcher = SessionSwitcher(sidebar, history)
+
+    first = await switcher.switch("ses_newest")
+
+    assert isinstance(first, SwitchResult)
+    assert [message.text for message in first.messages] == ["hola"]
+    assert sidebar.select_calls == ["ses_newest"]
+    assert history.calls == ["ses_newest"]
+    assert switcher.current_real_id == "ses_newest"
+
+    again = await switcher.switch("ses_newest")
+
+    assert again is None
+    assert sidebar.select_calls == ["ses_newest"]
+    assert history.calls == ["ses_newest"]
+
+
+async def test_tapping_another_session_loads_it_and_tracks_current() -> None:
+    sidebar = FakeSidebar("ses_a", sessions=(_summary("ses_a", active=True),))
+    history = FakeHistory()
+    switcher = SessionSwitcher(sidebar, history)
+
+    await switcher.switch("ses_a")  # the active/newest, not yet loaded -> loads
+    other = await switcher.switch("ses_b")  # different from current -> loads
+
+    assert isinstance(other, SwitchResult)
+    assert switcher.current_real_id == "ses_b"
+    assert history.calls == ["ses_a", "ses_b"]
+
+
+async def test_new_chat_reset_makes_the_next_tap_load() -> None:
+    """``main.new_chat`` clears the cache and forgets the loaded session."""
+
     sidebar = FakeSidebar("ses_a")
     history = FakeHistory()
     switcher = SessionSwitcher(sidebar, history)
 
-    result = await switcher.switch("ses_a")
+    await switcher.switch("ses_a")
+    assert await switcher.switch("ses_a") is None  # skip while loaded
 
-    assert result is None
-    assert sidebar.select_calls == []
-    assert history.calls == []
+    switcher.invalidate()
+    switcher.reset_current()  # exactly what ``main.new_chat`` does
+
+    assert switcher.current_real_id is None
+    reloaded = await switcher.switch("ses_a")
+    assert isinstance(reloaded, SwitchResult)
+    assert switcher.current_real_id == "ses_a"
+    assert history.calls == ["ses_a", "ses_a"]
 
 
 async def test_switch_loads_history_and_serves_it_from_cache() -> None:
