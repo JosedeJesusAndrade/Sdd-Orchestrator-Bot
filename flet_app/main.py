@@ -38,6 +38,7 @@ from flet_app.core.design_system import DS  # noqa: E402
 from flet_app.core.navigation import ScreenHost  # noqa: E402
 from flet_app.data.explorer import ExplorerController  # noqa: E402
 from flet_app.data.model_selector import ModelSelectorController  # noqa: E402
+from flet_app.data.session_switch import SessionSwitcher  # noqa: E402
 from flet_app.data.sidebar import SidebarController  # noqa: E402
 from flet_app.data.status_strip import StatusStripController  # noqa: E402
 from flet_app.edit_mode import EditMode, rename_failure_notice  # noqa: E402
@@ -114,6 +115,12 @@ async def main(page: ft.Page) -> None:
     )
     explorer = ExplorerController(core.workdir_service, CONVERSATION_ID)
     data_controllers = (sidebar, status_strip, model_selector, explorer)
+    # Switching skips the active session and caches each session's history, so a
+    # tap costs zero history reads after the first visit (BUG #2).
+    switcher = SessionSwitcher(
+        sidebar,
+        lambda real_id: core.conversations_service.messages(real_id, limit=50),
+    )
     logger.debug(
         "Flet data layer lista",
         extra={
@@ -218,6 +225,23 @@ async def main(page: ft.Page) -> None:
         chat.set_status(status_snapshot)
         page.update()
 
+    async def refresh_after_select() -> None:
+        """Refresh only the strip + captions after a switch (no re-list).
+
+        ``sidebar.select`` already updated the cached snapshot's active row, so a
+        full :func:`refresh_all` (which re-queries the agent history) would be
+        wasteful; render the cached snapshot and reload the status strip only.
+        """
+        snapshot = sidebar.snapshot
+        drawer.render(snapshot)
+        if snapshot.model:
+            chat.set_model(snapshot.model)
+        if snapshot.workdir:
+            chat.set_workdir(snapshot.workdir)
+        status_snapshot = await status_strip.load()
+        chat.set_status(status_snapshot)
+        page.update()
+
     async def on_send(
         event: ft.Event[ft.TextField] | ft.Event[ft.Container] | None = None,
     ) -> None:
@@ -255,6 +279,9 @@ async def main(page: ft.Page) -> None:
             chat.composer.set_running(False)
             page.update()
             finish_request("flet_on_send", CONVERSATION_ID, started)
+        # The active session just gained turns (and may have a new real id):
+        # drop the cached history so a later revisit reloads the fresh state.
+        switcher.invalidate()
         await refresh_all()
 
     async def on_cancel(
@@ -263,18 +290,24 @@ async def main(page: ft.Page) -> None:
         core.prompt_service.cancel(CONVERSATION_ID)
 
     async def select_session(real_id: str) -> None:
-        await sidebar.select(real_id)
+        # The switcher returns ``None`` for the ALREADY active session: only
+        # close the drawer, no reload (the user's "way back to the chat").
         try:
-            messages = await core.conversations_service.messages(real_id, limit=50)
+            result = await switcher.switch(real_id)
         except Exception:
             logger.exception(
                 "No se pudo cargar el historial de la sesión",
                 extra={"event": "flet_history_failed"},
             )
-            messages = []
-        render_history(chat.conversation, messages)
-        chat.reveal_conversation()
-        await refresh_all()
+            render_history(chat.conversation, [])
+            chat.reveal_conversation()
+            await refresh_after_select()
+            on_dismiss()
+            return
+        if result is not None:
+            render_history(chat.conversation, result.messages)
+            chat.reveal_conversation()
+            await refresh_after_select()
         on_dismiss()
 
     def on_select(real_id: str) -> None:
@@ -284,6 +317,7 @@ async def main(page: ft.Page) -> None:
         await sidebar.new_chat()
         view.reset()
         chat.reset()
+        switcher.invalidate()
         await refresh_all()
         on_dismiss()
 

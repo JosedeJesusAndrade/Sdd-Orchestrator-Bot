@@ -1,10 +1,14 @@
 """OpenCode implementation of the read-only agent-session seam.
 
-All queries go through ``query_opencode_db`` (the tested CLI adapter). SQL is
-interpolated because the CLI offers no parameter binding: every ``real_id`` is
-validated with :func:`is_valid_real_id` and every interpolated string is
-quote-escaped with the SQL-standard ``''`` rule. ``allowed_pattern`` is NOT used
-because its guard cannot see aliased predicates (``s.directory``, ``m.session_id``).
+Queries go through ``self._query``: by default the tested CLI adapter
+(``query_opencode_db``), or — when ``direct=True``, the production default in
+:func:`services.composition.build_prompt_stack` — the OpenCode SQLite file read
+directly (``query_opencode_db_direct``), which avoids the ~2 s Node boot per
+call. A failed direct read falls back to the CLI. SQL is interpolated because
+the CLI offers no parameter binding: every ``real_id`` is validated with
+:func:`is_valid_real_id` and every interpolated string is quote-escaped with the
+SQL-standard ``''`` rule. ``allowed_pattern`` is NOT used because its guard
+cannot see aliased predicates (``s.directory``, ``m.session_id``).
 """
 
 from __future__ import annotations
@@ -13,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from core_config import BASE_DIR
-from opencode.client import query_opencode_db
+from opencode.client import OpenCodeDBError, query_opencode_db
+from opencode.db import query_opencode_db_direct
 from services.agent_sessions import (
     ConversationSummary,
     InvalidSessionIdError,
@@ -21,10 +26,13 @@ from services.agent_sessions import (
     MessagePart,
     is_valid_real_id,
 )
+from utils.logging import get_module_logger
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 HISTORY_QUERY_TIMEOUT = 20.0
+
+logger = get_module_logger(__name__)
 
 # ── SQL builders (pure; exercised directly against a tmp sqlite DB) ────
 
@@ -175,8 +183,19 @@ def _rows_to_messages(rows: list[dict[str, Any]]) -> list[Message]:
 class OpenCodeSessions:
     """Read-only OpenCode history source backed by ``opencode.db``."""
 
-    def __init__(self, default_directory: str | Path = BASE_DIR) -> None:
+    def __init__(
+        self,
+        default_directory: str | Path = BASE_DIR,
+        *,
+        direct: bool = False,
+        db_path: str | Path | None = None,
+    ) -> None:
         self._default_directory = Path(default_directory)
+        # ``direct`` reads the SQLite file directly (production, via the
+        # composition root). It defaults to False so unit tests keep exercising
+        # the CLI adapter and every existing caller keeps its behavior.
+        self._direct = direct
+        self._db_path = Path(db_path) if db_path is not None else None
 
     def _directory(self, directory: str | None) -> str:
         return Path(directory or self._default_directory).as_posix()
@@ -186,25 +205,33 @@ class OpenCodeSessions:
         if not is_valid_real_id(real_id):
             raise InvalidSessionIdError(real_id)
 
-    async def list_sessions(
-        self, directory: str | None = None, limit: int = DEFAULT_LIMIT
-    ) -> list[ConversationSummary]:
-        sql = _build_list_sql(self._directory(directory), limit)
-        rows = await query_opencode_db(
+    async def _query(self, sql: str) -> list[dict[str, Any]]:
+        """Run a read-only history query (direct SQLite, CLI fallback)."""
+        if self._direct:
+            try:
+                return await query_opencode_db_direct(sql, db_path=self._db_path)
+            except OpenCodeDBError:
+                logger.warning(
+                    "Direct OpenCode DB read failed; falling back to the CLI",
+                    extra={"event": "opencode_db_direct_fallback"},
+                )
+        return await query_opencode_db(
             sql,
             raise_on_error=True,
             timeout=HISTORY_QUERY_TIMEOUT,
         )
+
+    async def list_sessions(
+        self, directory: str | None = None, limit: int = DEFAULT_LIMIT
+    ) -> list[ConversationSummary]:
+        sql = _build_list_sql(self._directory(directory), limit)
+        rows = await self._query(sql)
         return [_to_summary(row) for row in rows]
 
     async def count_sessions(self, directory: str | None = None) -> int:
         """Exact, uncapped count (the list page caps at :data:`MAX_LIMIT`)."""
         sql = _build_count_sql(self._directory(directory))
-        rows = await query_opencode_db(
-            sql,
-            raise_on_error=True,
-            timeout=HISTORY_QUERY_TIMEOUT,
-        )
+        rows = await self._query(sql)
         if not rows:
             return 0
         return int(rows[0].get("session_count") or 0)
@@ -214,19 +241,11 @@ class OpenCodeSessions:
     ) -> list[Message]:
         self._validate(real_id)
         sql = _build_messages_sql(real_id, limit, before)
-        rows = await query_opencode_db(
-            sql,
-            raise_on_error=True,
-            timeout=HISTORY_QUERY_TIMEOUT,
-        )
+        rows = await self._query(sql)
         return _rows_to_messages(rows)
 
     async def get_session(self, real_id: str) -> ConversationSummary | None:
         self._validate(real_id)
         sql = _build_get_session_sql(real_id)
-        rows = await query_opencode_db(
-            sql,
-            raise_on_error=True,
-            timeout=HISTORY_QUERY_TIMEOUT,
-        )
+        rows = await self._query(sql)
         return _to_summary(rows[0]) if rows else None

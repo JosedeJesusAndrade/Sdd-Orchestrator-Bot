@@ -212,17 +212,39 @@ class SidebarController(Loadable[None]):
         return self._snapshot
 
     async def select(self, real_id: str) -> SidebarSnapshot:
-        """Activate ``real_id`` (adopting it when needed) and reload (FD-04)."""
+        """Activate ``real_id`` (adopting it when needed) WITHOUT re-listing.
+
+        Switching sessions used to call :meth:`load`, which re-queries the agent
+        history (a ~2 s CLI boot). The active highlight and the (possibly new)
+        adopted name are patched into the cached snapshot instead, so a switch
+        costs no history read at all (FD-04).
+        """
         title = next(
             (session.title for session in self._snapshot.sessions if session.real_id == real_id),
             real_id,
         )
         try:
-            await self._conversations.open(self._key, real_id, title)
+            name = await self._conversations.open(self._key, real_id, title)
         except Exception as exc:
             self._fail(exc)
             return self._snapshot
-        return await self.load()
+        self._snapshot = replace(
+            self._snapshot,
+            active_real_id=real_id,
+            sessions=tuple(
+                replace(
+                    session,
+                    is_active=session.real_id == real_id,
+                    adopted_name=(
+                        name
+                        if session.real_id == real_id and session.adopted_name is None
+                        else session.adopted_name
+                    ),
+                )
+                for session in self._snapshot.sessions
+            ),
+        )
+        return self._snapshot
 
     async def new_chat(self) -> SidebarSnapshot:
         """Create/activate the next ``chat-N`` session and reload (FD-04)."""

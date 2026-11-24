@@ -329,16 +329,32 @@ async def test_load_failure_is_a_typed_error_snapshot() -> None:
 # ── SidebarController.select / new_chat ────────────────────────────────
 
 
-async def test_select_activates_and_reloads() -> None:
-    conversations = FakeConversations([_summary("ses_b", "Beta")])
+async def test_select_activates_without_relisting() -> None:
+    conversations = FakeConversations([_summary("ses_a", "Alpha"), _summary("ses_b", "Beta")])
     controller = _controller(conversations)
     await controller.load()
 
     snapshot = await controller.select("ses_b")
 
+    # No extra list: the active row is patched in place (BUG #2, no re-list).
     assert conversations.open_calls == [(_KEY, "ses_b", "Beta")]
-    assert len(conversations.list_calls) == 2
+    assert len(conversations.list_calls) == 1
+    assert snapshot.active_real_id == "ses_b"
+    assert [item.is_active for item in snapshot.sessions] == [False, True]
     assert snapshot.state == LoadReady(None)
+
+
+async def test_select_patches_the_adopted_name_locally() -> None:
+    conversations = FakeConversations([_summary("ses_b", "Beta", adopted_name=None)])
+    controller = _controller(conversations)
+    await controller.load()
+
+    snapshot = await controller.select("ses_b")
+
+    # ``FakeConversations.open`` returns "default": the freshly adopted row now
+    # carries that name without a re-list.
+    assert snapshot.sessions[0].adopted_name == "default"
+    assert snapshot.sessions[0].is_active is True
 
 
 async def test_select_uses_the_real_id_when_no_title_is_cached() -> None:

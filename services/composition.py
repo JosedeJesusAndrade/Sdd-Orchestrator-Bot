@@ -158,7 +158,9 @@ def build_prompt_stack(
     # effective_workdir -> session_service -> prompt_service. Every consumer of
     # the effective workdir shares THIS resolver so prompts, history, status and
     # session stamps can never disagree.
-    agent_sessions = OpenCodeSessions(resolved_sessions_directory)
+    # Production reads the SQLite file directly (read-only) instead of spawning
+    # the ~2 s-per-call CLI; a missing DB transparently falls back to the CLI.
+    agent_sessions = OpenCodeSessions(resolved_sessions_directory, direct=True)
     effective_workdir = EffectiveWorkdir(
         session_store,
         agent_sessions,
