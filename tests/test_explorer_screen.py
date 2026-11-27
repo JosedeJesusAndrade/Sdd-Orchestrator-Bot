@@ -1,35 +1,83 @@
 """Tests for the explorer screen (P5): breadcrumb, list, CRUD and select.
 
-Drives the real ``ExplorerController`` over a temporary ``home``; only ``ft.Page``
-is faked (dialogs + scheduled tasks) so no Flet client is needed. The screen is
-the VIEW: its behavior is pinned here while the controller/DTOs keep their own
-suites.
+Two layers, mirroring the split the refactor introduced:
+
+* the VIEW tests drive ``ExplorerScreen`` with fake data + recording callbacks and
+  prove it never touches the controller;
+* the PRESENTER tests drive ``ExplorerPresenter`` (from ``main``) over a real
+  ``ExplorerController`` and pin the async orchestration (list/select/CRUD +
+  post-mutation refresh).
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import flet as ft
 
 from flet_app.data.explorer import ExplorerController
+from flet_app.main import ExplorerPresenter
 from flet_app.screens.explorer_screen import ExplorerScreen, build_explorer_screen
 from flet_app.ui_strings import NON_GIT_CANCEL, NON_GIT_CONTINUE, workdir_failure_copy
 from services.conversation import ConversationKey
-from services.workdir_failures import WorkdirFailureKind
-from services.workdir_service import DirectoryEntry, DirectoryListing, WorkdirService
+from services.workdir_failures import WorkdirFailure, WorkdirFailureKind
+from services.workdir_service import (
+    DirectoryEntry,
+    DirectoryListing,
+    WorkdirService,
+)
 from tests.conversation_keys import conv
 
+_VIEW_SOURCE = Path(__file__).resolve().parents[1] / "flet_app" / "screens" / "explorer_screen.py"
 _KEY: ConversationKey = conv("flet:local")
 
 
 # ── Fakes ──────────────────────────────────────────────────────────────
 
 
+class FakePage:
+    """Minimal ``ft.Page`` stand-in: dialogs, scheduled tasks and updates."""
+
+    def __init__(self) -> None:
+        self.update_calls = 0
+        self.dialogs: list[ft.AlertDialog] = []
+        self.tasks: list[tuple[Callable[..., Any], tuple[object, ...]]] = []
+
+    def update(self, *controls: ft.Control) -> None:
+        self.update_calls += 1
+
+    def show_dialog(self, dialog: ft.AlertDialog) -> None:
+        self.dialogs.append(dialog)
+
+    def pop_dialog(self) -> ft.AlertDialog | None:
+        return self.dialogs.pop() if self.dialogs else None
+
+    def run_task(self, handler: Callable[..., Any], *args: object) -> None:
+        self.tasks.append((handler, args))
+
+    async def drain(self) -> None:
+        while self.tasks:
+            handler, args = self.tasks.pop(0)
+            await handler(*args)
+
+
+class Calls:
+    """Records every intent the pure view emits."""
+
+    def __init__(self) -> None:
+        self.back: list[bool] = []
+        self.enter: list[Path] = []
+        self.select: list[Path] = []
+        self.create: list[tuple[str, bool]] = []
+        self.rename: list[tuple[Path, str]] = []
+        self.delete: list[Path] = []
+        self.retry: list[bool] = []
+
+
 class FakeWorkdirStore:
-    """In-memory ``WorkdirStore`` double (mirrors the controller suite's fake)."""
+    """In-memory ``WorkdirStore`` double for the presenter integration tests."""
 
     def __init__(self) -> None:
         self.settings: dict[str, Any] = {}
@@ -45,32 +93,24 @@ class FakeWorkdirStore:
         self.writes.append((conversation_key, key, value))
 
 
-class FakePage:
-    """Minimal ``ft.Page`` stand-in: dialogs, scheduled tasks and updates."""
+class FakeView:
+    """Recording ``ExplorerView`` for the presenter tests."""
 
-    def __init__(self, *, width: float = 390, height: float = 844) -> None:
-        self.width = width
-        self.height = height
-        self.update_calls = 0
-        self.dialogs: list[ft.AlertDialog] = []
-        self.tasks: list[tuple[Callable[..., Awaitable[None]], tuple[object, ...]]] = []
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.listings: list[DirectoryListing] = []
+        self.errors: list[WorkdirFailure] = []
+        self.loading = 0
 
-    def update(self, *controls: ft.Control) -> None:
-        self.update_calls += 1
+    def render(self, listing: DirectoryListing) -> None:
+        self.listings.append(listing)
+        self.path = listing.path
 
-    def show_dialog(self, dialog: ft.AlertDialog) -> None:
-        self.dialogs.append(dialog)
+    def set_error(self, failure: WorkdirFailure) -> None:
+        self.errors.append(failure)
 
-    def pop_dialog(self) -> ft.AlertDialog | None:
-        return self.dialogs.pop() if self.dialogs else None
-
-    def run_task(self, handler: Callable[..., Awaitable[None]], *args: object) -> None:
-        self.tasks.append((handler, args))
-
-    async def drain(self) -> None:
-        while self.tasks:
-            handler, args = self.tasks.pop(0)
-            await handler(*args)
+    def set_loading(self) -> None:
+        self.loading += 1
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -93,49 +133,114 @@ def _texts(control: object) -> list[str]:
     return [c.value for c in _walk(control) if isinstance(c, ft.Text) and c.value is not None]
 
 
-async def _make(
-    tmp_path: Path,
+def _entry(
+    name: str,
+    path: Path,
     *,
-    on_select: Callable[[], None] | None = None,
-    on_back: Callable[[], None] | None = None,
-) -> tuple[ExplorerScreen, FakePage, FakeWorkdirStore, ExplorerController]:
-    store = FakeWorkdirStore()
-    controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
-    page = FakePage()
-    screen = build_explorer_screen(
-        cast(ft.Page, page),
-        controller,
-        on_back=on_back if on_back is not None else (lambda: None),
-        on_select=on_select if on_select is not None else (lambda: None),
+    is_dir: bool = True,
+    is_git: bool = False,
+    is_symlink: bool = False,
+) -> DirectoryEntry:
+    return DirectoryEntry(
+        name=name,
+        path=path,
+        is_dir=is_dir,
+        is_git=is_git,
+        is_symlink=is_symlink,
     )
-    return screen, page, store, controller
+
+
+def _listing(
+    path: Path,
+    *,
+    entries: tuple[DirectoryEntry, ...] = (),
+    ancestors: tuple[Path, ...] | None = None,
+    is_git: bool = False,
+) -> DirectoryListing:
+    resolved = path.resolve()
+    return DirectoryListing(
+        path=resolved,
+        parent=resolved.parent if resolved.parent != resolved else None,
+        entries=entries,
+        ancestors=ancestors if ancestors is not None else (resolved,),
+        is_git=is_git,
+        is_writable=True,
+    )
+
+
+def _build(page: FakePage | None = None) -> tuple[ExplorerScreen, FakePage, Calls]:
+    state = page if page is not None else FakePage()
+    calls = Calls()
+    screen = build_explorer_screen(
+        cast(ft.Page, state),
+        on_back=lambda: calls.back.append(True),
+        on_select=calls.select.append,
+        on_enter=calls.enter.append,
+        on_create=lambda name, init_git: calls.create.append((name, init_git)),
+        on_rename=lambda path, new: calls.rename.append((path, new)),
+        on_delete=calls.delete.append,
+        on_retry=lambda: calls.retry.append(True),
+    )
+    return screen, state, calls
 
 
 def _crumb_targets(screen: ExplorerScreen) -> list[object]:
     return [c.data for c in _walk(screen.breadcrumb) if isinstance(c, ft.TextButton)]
 
 
-# ── Breadcrumb + flat list (EX-01) ─────────────────────────────────────
+def _button(control: object, *, icon: object) -> ft.IconButton:
+    return next(c for c in _walk(control) if isinstance(c, ft.IconButton) and c.icon == icon)
 
 
-async def test_breadcrumb_matches_listing_ancestors(tmp_path: Path) -> None:
-    child = tmp_path / "proyecto"
-    child.mkdir()
-    screen, _, _, _ = await _make(tmp_path)
+def _entry_row(screen: ExplorerScreen, name: str) -> ft.Container:
+    return next(
+        c
+        for c in _walk(screen.entries_view)
+        if isinstance(c, ft.Container)
+        and isinstance(c.data, DirectoryEntry)
+        and c.data.name == name
+    )
 
-    await screen.load(child)
 
-    assert _crumb_targets(screen) == [tmp_path.resolve(), child.resolve()]
+def _make_presenter(
+    tmp_path: Path,
+    *,
+    on_selected: Callable[[], None] | None = None,
+) -> tuple[ExplorerPresenter, FakeView, FakeWorkdirStore]:
+    store = FakeWorkdirStore()
+    controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
+    view = FakeView()
+    presenter = ExplorerPresenter(
+        controller,
+        view,
+        on_selected=on_selected if on_selected is not None else (lambda: None),
+    )
+    return presenter, view, store
 
 
-async def test_list_renders_entries_with_git_badge(tmp_path: Path) -> None:
-    (tmp_path / "plain").mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    screen, _, _, _ = await _make(tmp_path)
+# ── Pure view: breadcrumb + flat list (EX-01) ──────────────────────────
 
-    await screen.load(tmp_path)
+
+def test_breadcrumb_matches_listing_ancestors(tmp_path: Path) -> None:
+    child = (tmp_path / "proyecto").resolve()
+    screen, _, _ = _build()
+
+    screen.render(_listing(child, ancestors=(tmp_path.resolve(), child)))
+
+    assert _crumb_targets(screen) == [tmp_path.resolve(), child]
+
+
+def test_list_renders_entries_with_git_badge(tmp_path: Path) -> None:
+    listing = _listing(
+        tmp_path,
+        entries=(
+            _entry("plain", tmp_path / "plain"),
+            _entry("repo", tmp_path / "repo", is_git=True),
+        ),
+    )
+    screen, _, _ = _build()
+
+    screen.render(listing)
 
     texts = _texts(screen.entries_view)
     assert "plain" in texts
@@ -143,24 +248,12 @@ async def test_list_renders_entries_with_git_badge(tmp_path: Path) -> None:
     assert "git" in texts
 
 
-async def test_list_marks_a_symlink_entry(tmp_path: Path) -> None:
-    screen, _, _, _ = await _make(tmp_path)
-    listing = DirectoryListing(
-        path=tmp_path,
-        parent=None,
-        entries=(
-            DirectoryEntry(
-                name="link",
-                path=tmp_path / "link",
-                is_dir=True,
-                is_git=False,
-                is_symlink=True,
-            ),
-        ),
-        ancestors=(tmp_path.resolve(),),
-        is_git=False,
-        is_writable=True,
+def test_list_marks_a_symlink_entry(tmp_path: Path) -> None:
+    listing = _listing(
+        tmp_path,
+        entries=(_entry("link", tmp_path / "link", is_symlink=True),),
     )
+    screen, _, _ = _build()
 
     screen.render(listing)
 
@@ -168,64 +261,56 @@ async def test_list_marks_a_symlink_entry(tmp_path: Path) -> None:
     assert ft.Icons.LINK in icons
 
 
-async def test_empty_directory_shows_the_empty_copy(tmp_path: Path) -> None:
-    screen, _, _, _ = await _make(tmp_path)
+def test_empty_directory_shows_the_empty_copy(tmp_path: Path) -> None:
+    screen, _, _ = _build()
 
-    await screen.load(tmp_path)
+    screen.render(_listing(tmp_path))
 
     assert "Esta carpeta está vacía." in _texts(screen.entries_view)
 
 
-async def test_tapping_a_directory_enters_it(tmp_path: Path) -> None:
-    child = tmp_path / "proyecto"
-    child.mkdir()
-    screen, page, _, _ = await _make(tmp_path)
-    await screen.load(tmp_path)
+def test_tapping_a_directory_asks_to_enter_it(tmp_path: Path) -> None:
+    child = (tmp_path / "proyecto").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path, entries=(_entry("proyecto", child),)))
 
-    row = next(
-        c
-        for c in _walk(screen.entries_view)
-        if isinstance(c, ft.Container)
-        and isinstance(c.data, DirectoryEntry)
-        and c.data.name == "proyecto"
-    )
-    cast(Callable[[object], None], row.on_click)(None)
-    await page.drain()
+    cast(Callable[[object], None], _entry_row(screen, "proyecto").on_click)(None)
 
-    assert screen.path == child.resolve()
-    assert child.resolve() in _crumb_targets(screen)
+    assert calls.enter == [child]
+    assert page.tasks == []
 
 
-# ── Browse vs select (D3 / EX-03) ──────────────────────────────────────
+def test_tapping_a_crumb_asks_to_enter_it(tmp_path: Path) -> None:
+    child = (tmp_path / "proyecto").resolve()
+    screen, _, calls = _build()
+    screen.render(_listing(child, ancestors=(tmp_path.resolve(), child)))
+
+    crumb = next(c for c in _walk(screen.breadcrumb) if isinstance(c, ft.TextButton))
+    cast(Callable[[object], None], crumb.on_click)(None)
+
+    assert calls.enter == [tmp_path.resolve()]
 
 
-async def test_cta_selects_a_git_directory_and_notifies(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    selected: list[str] = []
-    screen, page, store, _ = await _make(tmp_path, on_select=lambda: selected.append("ok"))
-    await screen.load(repo)
+# ── Pure view: browse vs select (D3 / EX-03) ───────────────────────────
 
-    assert screen.listing is not None
-    assert screen.listing.is_git is True
+
+def test_cta_selects_a_git_directory(tmp_path: Path) -> None:
+    repo = (tmp_path / "repo").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(repo, is_git=True))
+
     assert screen.use_button.disabled is False
 
     cast(Callable[[object], None], screen.use_button.on_click)(None)
-    await page.drain()
 
-    assert selected == ["ok"]
-    assert store.settings["workdir"] == str(repo.resolve())
+    assert calls.select == [repo]
+    assert page.tasks == []
 
 
-async def test_non_git_confirm_cancel_persists_nothing(tmp_path: Path) -> None:
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    screen, page, store, _ = await _make(tmp_path)
-    await screen.load(plain)
-
-    assert screen.listing is not None
-    assert screen.listing.is_git is False
+def test_non_git_confirm_cancel_emits_nothing(tmp_path: Path) -> None:
+    plain = (tmp_path / "plain").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(plain, is_git=False))
 
     cast(Callable[[object], None], screen.use_button.on_click)(None)
     assert len(page.dialogs) == 1
@@ -235,19 +320,15 @@ async def test_non_git_confirm_cancel_persists_nothing(tmp_path: Path) -> None:
         if isinstance(c, ft.TextButton) and c.content == NON_GIT_CANCEL
     )
     cast(Callable[[object], None], cancel.on_click)(None)
-    await page.drain()
 
     assert page.dialogs == []
-    assert store.writes == []
-    assert "workdir" not in store.settings
+    assert calls.select == []
 
 
-async def test_non_git_confirm_continue_persists(tmp_path: Path) -> None:
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    selected: list[str] = []
-    screen, page, store, _ = await _make(tmp_path, on_select=lambda: selected.append("ok"))
-    await screen.load(plain)
+def test_non_git_confirm_continue_asks_to_select(tmp_path: Path) -> None:
+    plain = (tmp_path / "plain").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(plain, is_git=False))
 
     cast(Callable[[object], None], screen.use_button.on_click)(None)
     cont = next(
@@ -256,19 +337,17 @@ async def test_non_git_confirm_continue_persists(tmp_path: Path) -> None:
         if isinstance(c, ft.FilledButton) and c.content == NON_GIT_CONTINUE
     )
     cast(Callable[[object], None], cont.on_click)(None)
-    await page.drain()
 
-    assert store.settings["workdir"] == str(plain.resolve())
-    assert selected == ["ok"]
+    assert calls.select == [plain]
 
 
-# ── Typed failure copy (EX-04) ─────────────────────────────────────────
+# ── Pure view: typed failure copy (EX-04) ──────────────────────────────
 
 
-async def test_failure_renders_copy_by_kind(tmp_path: Path) -> None:
-    screen, _, _, _ = await _make(tmp_path)
+def test_failure_renders_copy_by_kind(tmp_path: Path) -> None:
+    screen, _, _ = _build()
 
-    await screen.load(tmp_path.parent)
+    screen.set_error(WorkdirFailure(kind=WorkdirFailureKind.OUTSIDE_ROOT, path=tmp_path.parent))
 
     assert screen.failure is not None
     assert screen.failure.kind is WorkdirFailureKind.OUTSIDE_ROOT
@@ -276,95 +355,209 @@ async def test_failure_renders_copy_by_kind(tmp_path: Path) -> None:
     assert screen.error_text.value == workdir_failure_copy(WorkdirFailureKind.OUTSIDE_ROOT)
 
 
-async def test_failure_keeps_the_last_listing_browsable(tmp_path: Path) -> None:
-    (tmp_path / "a").mkdir()
-    screen, _, _, _ = await _make(tmp_path)
-    await screen.load(tmp_path)
+def test_failure_keeps_the_last_listing_browsable(tmp_path: Path) -> None:
+    screen, _, _ = _build()
+    screen.render(_listing(tmp_path.resolve()))
 
-    await screen.load(tmp_path.parent)
+    screen.set_error(WorkdirFailure(kind=WorkdirFailureKind.OUTSIDE_ROOT, path=tmp_path.parent))
 
     assert screen.path == tmp_path.resolve()
     assert screen.use_button.disabled is False
 
 
-# ── CRUD dialogs (EX-02) ───────────────────────────────────────────────
+def test_loading_disables_the_actions_until_render(tmp_path: Path) -> None:
+    screen, _, _ = _build()
+    screen.render(_listing(tmp_path.resolve()))
+
+    screen.set_loading()
+
+    assert screen.use_button.disabled is True
+    assert screen.new_button.disabled is True
+
+    screen.render(_listing(tmp_path.resolve()))
+
+    assert screen.use_button.disabled is False
 
 
-async def test_new_folder_dialog_creates_a_directory(tmp_path: Path) -> None:
-    screen, page, _, _ = await _make(tmp_path)
-    await screen.load(tmp_path)
+# ── Pure view: CRUD dialogs (EX-02) ────────────────────────────────────
+
+
+def test_new_folder_dialog_asks_to_create(tmp_path: Path) -> None:
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path.resolve()))
 
     cast(Callable[[object], None], screen.new_button.on_click)(None)
     dialog = page.dialogs[-1]
-    assert any(isinstance(c, ft.TextField) for c in _walk(dialog))
-    assert any(isinstance(c, ft.Checkbox) for c in _walk(dialog))
-
     field = next(c for c in _walk(dialog) if isinstance(c, ft.TextField))
+    assert any(isinstance(c, ft.Checkbox) for c in _walk(dialog))
     field.value = "nueva"
     create = next(c for c in _walk(dialog) if isinstance(c, ft.FilledButton))
     cast(Callable[[object], None], create.on_click)(None)
-    await page.drain()
 
-    assert (tmp_path / "nueva").is_dir()
-    assert "nueva" in _texts(screen.entries_view)
+    assert calls.create == [("nueva", False)]
 
 
-async def test_rename_dialog_renames_the_directory(tmp_path: Path) -> None:
-    (tmp_path / "viejo").mkdir()
-    screen, page, _, _ = await _make(tmp_path)
-    await screen.load(tmp_path)
+def test_new_folder_dialog_forwards_init_git(tmp_path: Path) -> None:
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path.resolve()))
 
-    rename_button = next(
-        c
-        for c in _walk(screen.entries_view)
-        if isinstance(c, ft.IconButton) and c.icon == ft.Icons.EDIT
-    )
-    cast(Callable[[object], None], rename_button.on_click)(None)
+    cast(Callable[[object], None], screen.new_button.on_click)(None)
+    dialog = page.dialogs[-1]
+    field = next(c for c in _walk(dialog) if isinstance(c, ft.TextField))
+    checkbox = next(c for c in _walk(dialog) if isinstance(c, ft.Checkbox))
+    field.value = "nueva"
+    checkbox.value = True
+    create = next(c for c in _walk(dialog) if isinstance(c, ft.FilledButton))
+    cast(Callable[[object], None], create.on_click)(None)
+
+    assert calls.create == [("nueva", True)]
+
+
+def test_rename_dialog_asks_to_rename(tmp_path: Path) -> None:
+    target = (tmp_path / "viejo").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path, entries=(_entry("viejo", target),)))
+
+    cast(Callable[[object], None], _button(screen.entries_view, icon=ft.Icons.EDIT).on_click)(None)
     dialog = page.dialogs[-1]
     field = next(c for c in _walk(dialog) if isinstance(c, ft.TextField))
     assert field.value == "viejo"
-
     field.value = "nuevo"
     save = next(c for c in _walk(dialog) if isinstance(c, ft.FilledButton))
     cast(Callable[[object], None], save.on_click)(None)
-    await page.drain()
+
+    assert calls.rename == [(target, "nuevo")]
+
+
+def test_rename_dialog_ignores_an_unchanged_name(tmp_path: Path) -> None:
+    target = (tmp_path / "viejo").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path, entries=(_entry("viejo", target),)))
+
+    cast(Callable[[object], None], _button(screen.entries_view, icon=ft.Icons.EDIT).on_click)(None)
+    save = next(c for c in _walk(page.dialogs[-1]) if isinstance(c, ft.FilledButton))
+    cast(Callable[[object], None], save.on_click)(None)
+
+    assert calls.rename == []
+
+
+def test_delete_confirm_asks_to_delete(tmp_path: Path) -> None:
+    target = (tmp_path / "basura").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path, entries=(_entry("basura", target),)))
+
+    cast(
+        Callable[[object], None],
+        _button(screen.entries_view, icon=ft.Icons.DELETE_OUTLINE).on_click,
+    )(None)
+    confirm = next(c for c in _walk(page.dialogs[-1]) if isinstance(c, ft.FilledButton))
+    cast(Callable[[object], None], confirm.on_click)(None)
+
+    assert calls.delete == [target]
+
+
+# ── Pure view: retry / back ────────────────────────────────────────────
+
+
+def test_retry_button_emits_retry() -> None:
+    screen, _, calls = _build()
+    retry = next(
+        c
+        for c in _walk(screen.error_holder)
+        if isinstance(c, ft.TextButton) and c.icon == ft.Icons.REFRESH
+    )
+
+    cast(Callable[[object], None], retry.on_click)(None)
+
+    assert calls.retry == [True]
+
+
+def test_back_invokes_the_callback() -> None:
+    screen, _, calls = _build()
+
+    cast(Callable[[object], None], _button(screen.control, icon=ft.Icons.ARROW_BACK).on_click)(None)
+
+    assert calls.back == [True]
+
+
+def test_screen_source_has_no_controller_dependency() -> None:
+    source = _VIEW_SOURCE.read_text(encoding="utf-8")
+
+    assert "ExplorerController" not in source
+    assert "await self._controller" not in source
+    assert "await controller" not in source
+
+
+# ── Presenter wiring (main): list / select / CRUD / retry ──────────────
+
+
+async def test_presenter_open_lists_the_first_root(tmp_path: Path) -> None:
+    presenter, view, _ = _make_presenter(tmp_path)
+
+    await presenter.open()
+
+    assert view.loading == 1
+    assert view.errors == []
+    assert view.listings[-1].path == tmp_path.resolve()
+
+
+async def test_presenter_create_refreshes_the_listing(tmp_path: Path) -> None:
+    presenter, view, _ = _make_presenter(tmp_path)
+    await presenter.open()
+
+    await presenter.create("nueva", False)
+
+    assert (tmp_path / "nueva").is_dir()
+    assert "nueva" in [entry.name for entry in view.listings[-1].entries]
+
+
+async def test_presenter_rename_refreshes_the_listing(tmp_path: Path) -> None:
+    (tmp_path / "viejo").mkdir()
+    presenter, view, _ = _make_presenter(tmp_path)
+    await presenter.open()
+
+    await presenter.rename(tmp_path / "viejo", "nuevo")
 
     assert (tmp_path / "nuevo").is_dir()
     assert not (tmp_path / "viejo").exists()
-    assert "nuevo" in _texts(screen.entries_view)
+    assert "nuevo" in [entry.name for entry in view.listings[-1].entries]
 
 
-async def test_delete_confirm_deletes_the_directory(tmp_path: Path) -> None:
+async def test_presenter_delete_refreshes_the_listing(tmp_path: Path) -> None:
     (tmp_path / "basura").mkdir()
-    screen, page, _, _ = await _make(tmp_path)
-    await screen.load(tmp_path)
+    presenter, view, _ = _make_presenter(tmp_path)
+    await presenter.open()
 
-    delete_button = next(
-        c
-        for c in _walk(screen.entries_view)
-        if isinstance(c, ft.IconButton) and c.icon == ft.Icons.DELETE_OUTLINE
-    )
-    cast(Callable[[object], None], delete_button.on_click)(None)
-    confirm = next(c for c in _walk(page.dialogs[-1]) if isinstance(c, ft.FilledButton))
-    cast(Callable[[object], None], confirm.on_click)(None)
-    await page.drain()
+    await presenter.delete(tmp_path / "basura")
 
     assert not (tmp_path / "basura").exists()
-    assert "basura" not in _texts(screen.entries_view)
+    assert "basura" not in [entry.name for entry in view.listings[-1].entries]
 
 
-# ── Back to chat ───────────────────────────────────────────────────────
+async def test_presenter_select_persists_and_notifies(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    selected: list[str] = []
+    presenter, view, store = _make_presenter(tmp_path, on_selected=lambda: selected.append("ok"))
+    await presenter.load(repo)
+
+    await presenter.select(repo)
+
+    assert store.settings["workdir"] == str(repo.resolve())
+    assert selected == ["ok"]
+    assert view.listings[-1].path == repo.resolve()
 
 
-async def test_back_invokes_the_callback(tmp_path: Path) -> None:
-    calls: list[str] = []
-    screen, _, _, _ = await _make(tmp_path, on_back=lambda: calls.append("back"))
+async def test_presenter_failure_renders_and_retry_reloads(tmp_path: Path) -> None:
+    presenter, view, _ = _make_presenter(tmp_path)
+    await presenter.open()
 
-    back = next(
-        c
-        for c in _walk(screen.control)
-        if isinstance(c, ft.IconButton) and c.icon == ft.Icons.ARROW_BACK
-    )
-    cast(Callable[[object], None], back.on_click)(None)
+    await presenter.load(tmp_path.parent)
 
-    assert calls == ["back"]
+    assert view.errors[-1].kind is WorkdirFailureKind.OUTSIDE_ROOT
+
+    await presenter.retry()
+
+    assert len(view.errors) == 2
+    assert view.loading >= 3

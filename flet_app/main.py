@@ -17,7 +17,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 # ``flet run`` may execute this file with flet_app/ as sys.path[0]; make the
 # repository root importable so ``services.*`` resolves.
@@ -60,6 +60,11 @@ from services.server_lifecycle import (  # noqa: E402
     log_server_left_running,
     warm_up_server,
 )
+from services.workdir_service import (  # noqa: E402
+    DirectoryEntry,
+    DirectoryListing,
+    WorkdirFailure,
+)
 
 CONVERSATION_ID = flet_key()
 
@@ -86,6 +91,103 @@ async def warm_up_gui(
     if not ready:
         await send_notice(WARM_UP_FAILED_MESSAGE)
     return ready
+
+
+class ExplorerView(Protocol):
+    """The pure explorer view the presenter feeds (data in, callbacks out)."""
+
+    @property
+    def path(self) -> Path | None: ...
+
+    def render(self, listing: DirectoryListing) -> None: ...
+
+    def set_error(self, failure: WorkdirFailure) -> None: ...
+
+    def set_loading(self) -> None: ...
+
+
+class ExplorerPresenter:
+    """Drive the workdir controller and feed the pure explorer view (P5).
+
+    Extracted from :func:`main` so the async orchestration (list/select/CRUD plus
+    the post-mutation refresh) is unit-testable without a live Flet session.
+    """
+
+    def __init__(
+        self,
+        controller: ExplorerController,
+        view: ExplorerView,
+        *,
+        on_selected: Callable[[], None],
+    ) -> None:
+        self._controller = controller
+        self._view = view
+        self._on_selected = on_selected
+        self._last_attempt: Path | None = None
+
+    async def open(self) -> None:
+        """List the first root, if any (the initial browse)."""
+        roots = self._controller.roots()
+        if roots:
+            await self.load(roots[0])
+
+    async def load(self, path: Path | str) -> None:
+        """Browse ``path`` and render the listing or its typed failure."""
+        target = Path(path)
+        self._last_attempt = target
+        self._view.set_loading()
+        result = await self._controller.list_dir(target)
+        if isinstance(result, WorkdirFailure):
+            self._view.set_error(result)
+            return
+        self._show(result)
+
+    async def select(self, path: Path | str) -> None:
+        """Persist ``path`` as the workdir, refresh and notify selection."""
+        result = await self._controller.select(path)
+        if isinstance(result, WorkdirFailure):
+            self._view.set_error(result)
+            return
+        self._on_selected()
+        self._show_refreshed()
+
+    async def create(self, name: str, init_git: bool) -> None:
+        """Create a child under the directory the view is browsing."""
+        parent = self._view.path
+        if parent is None:
+            return
+        result = await self._controller.create_child(parent, name, init_git=init_git)
+        self._after_mutation(result)
+
+    async def rename(self, path: Path, new_name: str) -> None:
+        """Rename the directory at ``path`` then refresh its parent."""
+        result = await self._controller.rename(path, new_name)
+        self._after_mutation(result)
+
+    async def delete(self, path: Path) -> None:
+        """Delete the directory at ``path`` then refresh its parent."""
+        result = await self._controller.delete(path)
+        self._after_mutation(result)
+
+    async def retry(self) -> None:
+        """Re-attempt the last browse target (only after a failure)."""
+        if self._last_attempt is not None:
+            await self.load(self._last_attempt)
+
+    def _after_mutation(self, result: DirectoryEntry | WorkdirFailure) -> None:
+        if isinstance(result, WorkdirFailure):
+            self._view.set_error(result)
+            return
+        self._show_refreshed()
+
+    def _show_refreshed(self) -> None:
+        listing = self._controller.listing
+        if isinstance(listing, DirectoryListing):
+            self._show(listing)
+
+    def _show(self, listing: DirectoryListing) -> None:
+        self._last_attempt = listing.path
+        self._view.render(listing)
 
 
 async def main(page: ft.Page) -> None:
@@ -406,18 +508,45 @@ async def main(page: ft.Page) -> None:
     def request_refresh() -> None:
         page.run_task(refresh_all)
 
+    presenter: ExplorerPresenter
+
+    def on_enter(path: Path) -> None:
+        page.run_task(presenter.load, path)
+
+    def on_select_path(path: Path) -> None:
+        page.run_task(presenter.select, path)
+
+    def on_create(name: str, init_git: bool) -> None:
+        page.run_task(presenter.create, name, init_git)
+
+    def on_rename(path: Path, new_name: str) -> None:
+        page.run_task(presenter.rename, path, new_name)
+
+    def on_delete(path: Path) -> None:
+        page.run_task(presenter.delete, path)
+
+    def on_retry() -> None:
+        page.run_task(presenter.retry)
+
     explorer_screen = build_explorer_screen(
         page,
-        explorer,
         on_back=on_back,
-        on_select=request_refresh,
+        on_select=on_select_path,
+        on_enter=on_enter,
+        on_create=on_create,
+        on_rename=on_rename,
+        on_delete=on_delete,
+        on_retry=on_retry,
+    )
+    presenter = ExplorerPresenter(
+        explorer,
+        explorer_screen,
+        on_selected=request_refresh,
     )
 
     async def open_explorer() -> None:
         on_dismiss()
-        roots = explorer.roots()
-        if roots:
-            await explorer_screen.load(roots[0])
+        await presenter.open()
         await host.show(explorer_screen.control)
 
     def on_open_explorer() -> None:

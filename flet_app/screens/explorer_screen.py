@@ -1,9 +1,11 @@
 """Explorer screen: breadcrumb + flat list + CRUD + select (EX-01..EX-04).
 
-This is the VIEW of the workdir explorer. All data arrives through the injected
-:class:`~flet_app.data.explorer.ExplorerController` (the pure data layer); the
-screen builds no service and owns no copy — strings come from
-``flet_app.ui_strings`` and failures are mapped through
+This is the PURE VIEW of the workdir explorer. It never calls the data layer:
+``main`` feeds the DATA through :meth:`ExplorerScreen.render` /
+:meth:`ExplorerScreen.set_error` / :meth:`ExplorerScreen.set_loading` and receives
+the user intent through the injected CALLBACKS (``on_enter``, ``on_select``,
+``on_create``, ``on_rename``, ``on_delete``, ``on_back``, ``on_retry``). Strings
+come from ``flet_app.ui_strings`` and failures are mapped through
 :func:`~flet_app.ui_strings.workdir_failure_copy` keyed by ``WorkdirFailureKind``.
 
 Orthogonality (D3): tapping a directory row ENTERS it (browse); only the
@@ -20,7 +22,6 @@ import flet as ft
 
 from flet_app.components.app_background import app_background
 from flet_app.core.design_system import DS
-from flet_app.data.explorer import ExplorerController
 from flet_app.ui_strings import (
     CANCEL,
     EXPLORER_BACK,
@@ -49,25 +50,32 @@ from services.workdir_service import DirectoryEntry, DirectoryListing, WorkdirFa
 
 
 class ExplorerScreen:
-    """The assembled explorer plus the handles ``main`` drives (P5 wiring)."""
+    """The assembled explorer view (data + callbacks, no controller)."""
 
     def __init__(
         self,
         page: ft.Page,
-        controller: ExplorerController,
         *,
         on_back: Callable[[], None],
-        on_select: Callable[[], None],
+        on_select: Callable[[Path], None],
+        on_enter: Callable[[Path], None],
+        on_create: Callable[[str, bool], None],
+        on_rename: Callable[[Path, str], None],
+        on_delete: Callable[[Path], None],
+        on_retry: Callable[[], None],
     ) -> None:
         self._page = page
-        self._controller = controller
         self._on_back = on_back
         self._on_select = on_select
+        self._on_enter = on_enter
+        self._on_create = on_create
+        self._on_rename = on_rename
+        self._on_delete = on_delete
+        self._on_retry = on_retry
 
         self._listing: DirectoryListing | None = None
         self._failure: WorkdirFailure | None = None
         self._path: Path | None = None
-        self._attempt: Path | None = None
 
         self.breadcrumb = ft.Row(
             controls=[],
@@ -138,28 +146,27 @@ class ExplorerScreen:
         """The directory currently being browsed."""
         return self._path
 
-    # ── Loading / rendering ────────────────────────────────────────────
+    # ── Data in (fed by ``main``) ──────────────────────────────────────
 
-    async def load(self, path: Path | str) -> None:
-        """List ``path`` through the controller and render the result."""
-        target = Path(path)
-        self._attempt = target
-        result = await self._controller.list_dir(target)
-        self.render(result)
+    def render(self, listing: DirectoryListing) -> None:
+        """Repaint the breadcrumb + list for a successful listing."""
+        self._render_listing(listing)
+        self._page.update()
 
-    def render(self, result: DirectoryListing | WorkdirFailure) -> None:
-        """Repaint the breadcrumb + list (or the typed failure copy)."""
-        if isinstance(result, WorkdirFailure):
-            self._render_failure(result)
-        else:
-            self._render_listing(result)
+    def set_error(self, failure: WorkdirFailure) -> None:
+        """Repaint the typed failure copy, keeping any last listing browsable."""
+        self._render_failure(failure)
+        self._page.update()
+
+    def set_loading(self) -> None:
+        """Mark an in-flight request (actions disabled until data arrives)."""
+        self._set_actions_enabled(False)
         self._page.update()
 
     def _render_listing(self, listing: DirectoryListing) -> None:
         self._listing = listing
         self._failure = None
         self._path = listing.path
-        self._attempt = listing.path
         self._render_breadcrumb(listing.ancestors)
         self._render_entries(listing)
         self.error_holder.visible = False
@@ -192,7 +199,7 @@ class ExplorerScreen:
 
     def _crumb(self, path: Path, *, current: bool) -> ft.Control:
         def handle_tap(_: ft.Event[ft.TextButton]) -> None:
-            self._page.run_task(self._enter, path)
+            self._on_enter(path)
 
         return ft.TextButton(
             content=ft.Text(
@@ -254,7 +261,7 @@ class ExplorerScreen:
             )
 
         def handle_enter(_: ft.Event[ft.Container]) -> None:
-            self._page.run_task(self._enter, entry.path)
+            self._on_enter(entry.path)
 
         return ft.Container(
             data=entry,
@@ -308,39 +315,23 @@ class ExplorerScreen:
 
     # ── Browse vs select (D3) ──────────────────────────────────────────
 
-    async def _enter(self, path: Path) -> None:
-        await self.load(path)
-
-    async def _select(self) -> None:
-        path = self._path
-        if path is None:
-            return
-        result = await self._controller.select(path)
-        if isinstance(result, WorkdirFailure):
-            self.render(result)
-            return
-        self._on_select()
-        listing = self._controller.listing
-        if listing is not None:
-            self.render(listing)
-
     def _use_current(self) -> None:
         """CTA: SELECT the current directory (non-git asks first)."""
         listing = self._listing
         if listing is None:
             return
         if listing.is_git:
-            self._page.run_task(self._select)
+            self._on_select(listing.path)
             return
-        self._open_non_git_confirm()
+        self._open_non_git_confirm(listing.path)
 
-    def _open_non_git_confirm(self) -> None:
+    def _open_non_git_confirm(self, path: Path) -> None:
         def handle_cancel(_: ft.Event[ft.TextButton]) -> None:
             self._page.pop_dialog()
 
         def handle_continue(_: ft.Event[ft.Button]) -> None:
             self._page.pop_dialog()
-            self._page.run_task(self._select)
+            self._on_select(path)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -353,35 +344,10 @@ class ExplorerScreen:
         )
         self._page.show_dialog(dialog)
 
-    # ── CRUD (EX-02) ───────────────────────────────────────────────────
-
-    async def _create(self, parent: Path, name: str, init_git: bool) -> None:
-        result = await self._controller.create_child(parent, name, init_git=init_git)
-        self._render_mutation(result)
-
-    async def _rename(self, path: Path, new_name: str) -> None:
-        result = await self._controller.rename(path, new_name)
-        self._render_mutation(result)
-
-    async def _delete(self, path: Path) -> None:
-        result = await self._controller.delete(path)
-        self._render_mutation(result)
-
-    async def _retry(self) -> None:
-        if self._attempt is not None:
-            await self.load(self._attempt)
-
-    def _render_mutation(self, result: DirectoryEntry | WorkdirFailure) -> None:
-        if isinstance(result, WorkdirFailure):
-            self.render(result)
-            return
-        listing = self._controller.listing
-        if listing is not None:
-            self.render(listing)
+    # ── CRUD dialogs (EX-02) ───────────────────────────────────────────
 
     def _open_create(self) -> None:
-        parent = self._path
-        if parent is None:
+        if self._path is None:
             return
         name_field = ft.TextField(label=EXPLORER_FOLDER_NAME, autofocus=True)
         init_git = ft.Checkbox(label=EXPLORER_INIT_GIT, value=False)
@@ -393,7 +359,7 @@ class ExplorerScreen:
             name = (name_field.value or "").strip()
             self._page.pop_dialog()
             if name:
-                self._page.run_task(self._create, parent, name, bool(init_git.value))
+                self._on_create(name, bool(init_git.value))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -424,7 +390,7 @@ class ExplorerScreen:
             new_name = (name_field.value or "").strip()
             self._page.pop_dialog()
             if new_name and new_name != current_name:
-                self._page.run_task(self._rename, path, new_name)
+                self._on_rename(path, new_name)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -443,7 +409,7 @@ class ExplorerScreen:
 
         def handle_delete(_: ft.Event[ft.Button]) -> None:
             self._page.pop_dialog()
-            self._page.run_task(self._delete, path)
+            self._on_delete(path)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -456,10 +422,10 @@ class ExplorerScreen:
         )
         self._page.show_dialog(dialog)
 
-    # ── Event handlers (sync -> run_task) ──────────────────────────────
+    # ── Event handlers ─────────────────────────────────────────────────
 
     def _handle_retry(self, _: ft.Event[ft.TextButton]) -> None:
-        self._page.run_task(self._retry)
+        self._on_retry()
 
     def _handle_new(self, _: ft.Event[ft.TextButton]) -> None:
         self._open_create()
@@ -561,10 +527,23 @@ class ExplorerScreen:
 
 def build_explorer_screen(
     page: ft.Page,
-    controller: ExplorerController,
     *,
     on_back: Callable[[], None],
-    on_select: Callable[[], None],
+    on_select: Callable[[Path], None],
+    on_enter: Callable[[Path], None],
+    on_create: Callable[[str, bool], None],
+    on_rename: Callable[[Path, str], None],
+    on_delete: Callable[[Path], None],
+    on_retry: Callable[[], None],
 ) -> ExplorerScreen:
-    """Build the explorer view over ``controller`` (callbacks, no services)."""
-    return ExplorerScreen(page, controller, on_back=on_back, on_select=on_select)
+    """Build the pure explorer view over the injected callbacks."""
+    return ExplorerScreen(
+        page,
+        on_back=on_back,
+        on_select=on_select,
+        on_enter=on_enter,
+        on_create=on_create,
+        on_rename=on_rename,
+        on_delete=on_delete,
+        on_retry=on_retry,
+    )
