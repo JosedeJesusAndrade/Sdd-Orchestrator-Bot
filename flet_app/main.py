@@ -118,7 +118,7 @@ class ExplorerPresenter:
         controller: ExplorerController,
         view: ExplorerView,
         *,
-        on_selected: Callable[[], None],
+        on_selected: Callable[[], Awaitable[None]],
     ) -> None:
         self._controller = controller
         self._view = view
@@ -143,13 +143,13 @@ class ExplorerPresenter:
         self._show(result)
 
     async def select(self, path: Path | str) -> None:
-        """Persist ``path`` as the workdir, refresh and notify selection."""
+        """Persist ``path`` as the workdir, refresh then return to the chat."""
         result = await self._controller.select(path)
         if isinstance(result, WorkdirFailure):
             self._view.set_error(result)
             return
-        self._on_selected()
         self._show_refreshed()
+        await self._on_selected()
 
     async def create(self, name: str, init_git: bool) -> None:
         """Create a child under the directory the view is browsing."""
@@ -505,8 +505,15 @@ async def main(page: ft.Page) -> None:
     def on_back() -> None:
         page.run_task(show_chat)
 
-    def request_refresh() -> None:
-        page.run_task(refresh_all)
+    async def after_explorer_select() -> None:
+        """Refresh the chrome for the new workdir, then reveal the chat.
+
+        The topbar/composer caption only reads the freshly persisted workdir
+        after :func:`refresh_all`, so navigating back is the visual confirmation
+        of the change (no manual back tap needed).
+        """
+        await refresh_all()
+        await host.show(chat.control)
 
     presenter: ExplorerPresenter
 
@@ -541,7 +548,7 @@ async def main(page: ft.Page) -> None:
     presenter = ExplorerPresenter(
         explorer,
         explorer_screen,
-        on_selected=request_refresh,
+        on_selected=after_explorer_select,
     )
 
     async def open_explorer() -> None:

@@ -11,12 +11,13 @@ Two layers, mirroring the split the refactor introduced:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import flet as ft
 
+from flet_app.core.navigation import ScreenHost
 from flet_app.data.explorer import ExplorerController
 from flet_app.main import ExplorerPresenter
 from flet_app.screens.explorer_screen import ExplorerScreen, build_explorer_screen
@@ -202,10 +203,14 @@ def _entry_row(screen: ExplorerScreen, name: str) -> ft.Container:
     )
 
 
+async def _noop_navigate() -> None:
+    """Inert post-select navigation hook for presenter tests."""
+
+
 def _make_presenter(
     tmp_path: Path,
     *,
-    on_selected: Callable[[], None] | None = None,
+    on_selected: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[ExplorerPresenter, FakeView, FakeWorkdirStore]:
     store = FakeWorkdirStore()
     controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
@@ -213,7 +218,7 @@ def _make_presenter(
     presenter = ExplorerPresenter(
         controller,
         view,
-        on_selected=on_selected if on_selected is not None else (lambda: None),
+        on_selected=on_selected if on_selected is not None else _noop_navigate,
     )
     return presenter, view, store
 
@@ -539,7 +544,11 @@ async def test_presenter_select_persists_and_notifies(tmp_path: Path) -> None:
     repo.mkdir()
     (repo / ".git").mkdir()
     selected: list[str] = []
-    presenter, view, store = _make_presenter(tmp_path, on_selected=lambda: selected.append("ok"))
+
+    async def on_selected() -> None:
+        selected.append("ok")
+
+    presenter, view, store = _make_presenter(tmp_path, on_selected=on_selected)
     await presenter.load(repo)
 
     await presenter.select(repo)
@@ -547,6 +556,108 @@ async def test_presenter_select_persists_and_notifies(tmp_path: Path) -> None:
     assert store.settings["workdir"] == str(repo.resolve())
     assert selected == ["ok"]
     assert view.listings[-1].path == repo.resolve()
+
+
+async def test_presenter_select_navigates_back_after_success(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    navigations: list[str] = []
+
+    async def navigate() -> None:
+        navigations.append("chat")
+
+    presenter, _, _ = _make_presenter(tmp_path, on_selected=navigate)
+    await presenter.load(repo)
+
+    await presenter.select(repo)
+
+    assert navigations == ["chat"]
+
+
+async def test_presenter_select_failure_does_not_navigate(tmp_path: Path) -> None:
+    navigations: list[str] = []
+
+    async def navigate() -> None:
+        navigations.append("chat")
+
+    presenter, view, _ = _make_presenter(tmp_path, on_selected=navigate)
+    await presenter.open()
+
+    await presenter.select(tmp_path.parent)
+
+    assert view.errors[-1].kind is WorkdirFailureKind.OUTSIDE_ROOT
+    assert navigations == []
+
+
+async def test_non_git_continue_returns_to_chat(tmp_path: Path) -> None:
+    plain = (tmp_path / "plain").resolve()
+    plain.mkdir()
+    state = FakePage()
+    chat_control = ft.Container(ft.Text("chat"))
+    host = ScreenHost(cast(ft.Page, state), ft.Container(ft.Text("explorer")))
+
+    async def navigate() -> None:
+        await host.show(chat_control)
+
+    presenter, _, _ = _make_presenter(tmp_path, on_selected=navigate)
+    screen = build_explorer_screen(
+        cast(ft.Page, state),
+        on_back=lambda: None,
+        on_select=lambda path: state.run_task(presenter.select, path),
+        on_enter=lambda path: None,
+        on_create=lambda name, init_git: None,
+        on_rename=lambda path, new_name: None,
+        on_delete=lambda path: None,
+        on_retry=lambda: None,
+    )
+    screen.render(_listing(plain, is_git=False))
+
+    cast(Callable[[object], None], screen.use_button.on_click)(None)
+    cont = next(
+        c
+        for c in _walk(state.dialogs[0])
+        if isinstance(c, ft.FilledButton) and c.content == NON_GIT_CONTINUE
+    )
+    cast(Callable[[object], None], cont.on_click)(None)
+    await state.drain()
+
+    assert host.control.content is chat_control
+
+
+async def test_non_git_cancel_does_not_navigate(tmp_path: Path) -> None:
+    plain = (tmp_path / "plain").resolve()
+    plain.mkdir()
+    state = FakePage()
+    chat_control = ft.Container(ft.Text("chat"))
+    host = ScreenHost(cast(ft.Page, state), ft.Container(ft.Text("explorer")))
+
+    async def navigate() -> None:
+        await host.show(chat_control)
+
+    presenter, _, _ = _make_presenter(tmp_path, on_selected=navigate)
+    screen = build_explorer_screen(
+        cast(ft.Page, state),
+        on_back=lambda: None,
+        on_select=lambda path: state.run_task(presenter.select, path),
+        on_enter=lambda path: None,
+        on_create=lambda name, init_git: None,
+        on_rename=lambda path, new_name: None,
+        on_delete=lambda path: None,
+        on_retry=lambda: None,
+    )
+    screen.render(_listing(plain, is_git=False))
+
+    cast(Callable[[object], None], screen.use_button.on_click)(None)
+    cancel = next(
+        c
+        for c in _walk(state.dialogs[0])
+        if isinstance(c, ft.TextButton) and c.content == NON_GIT_CANCEL
+    )
+    cast(Callable[[object], None], cancel.on_click)(None)
+    await state.drain()
+
+    assert host.control.content is not chat_control
 
 
 async def test_presenter_failure_renders_and_retry_reloads(tmp_path: Path) -> None:
