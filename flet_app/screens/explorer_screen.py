@@ -78,6 +78,7 @@ class ExplorerScreen:
         self._failure: WorkdirFailure | None = None
         self._path: Path | None = None
         self._recent: tuple[Path, ...] = ()
+        self._loading = False
 
         self.breadcrumb = ft.Row(
             controls=[],
@@ -171,29 +172,38 @@ class ExplorerScreen:
         self._render_failure(failure)
         self._page.update()
 
-    def set_loading(self) -> None:
-        """Mark an in-flight request (actions disabled until data arrives)."""
-        self._set_actions_enabled(False)
+    def set_loading(self, loading: bool = True) -> None:
+        """Toggle the in-flight state (actions disabled only while it lasts).
+
+        ``loading`` defaults to ``True`` so ``load``/``select`` can disable the
+        actions during the fetch; callers MUST pass ``False`` on every terminal
+        path (success, failure and exception) to re-enable them. The presenter
+        does this in a ``finally`` — see :class:`~flet_app.main.ExplorerPresenter`.
+        """
+        self._loading = loading
+        self._refresh_actions()
         self._page.update()
 
     def _render_listing(self, listing: DirectoryListing) -> None:
         self._listing = listing
         self._failure = None
         self._path = listing.path
+        self._loading = False
         self._render_breadcrumb(listing.ancestors)
         self._render_entries(listing)
         self.error_holder.visible = False
         self.entries_view.visible = True
-        self._set_actions_enabled(True)
+        self._refresh_actions()
 
     def _render_failure(self, failure: WorkdirFailure) -> None:
         self._failure = failure
+        self._loading = False
         self.error_text.value = workdir_failure_copy(failure.kind)
         self.error_holder.visible = True
         # A failed navigation keeps the last good directory browsable; only a
         # failure with no listing at all leaves the actions disabled.
         self.entries_view.visible = self._listing is not None
-        self._set_actions_enabled(self._listing is not None)
+        self._refresh_actions()
 
     def _render_breadcrumb(self, ancestors: tuple[Path, ...]) -> None:
         controls: list[ft.Control] = []
@@ -382,6 +392,10 @@ class ExplorerScreen:
                 color=DS.colors.accent_soft,
             ),
         )
+
+    def _refresh_actions(self) -> None:
+        """Actions follow the in-flight state AND whether a listing exists."""
+        self._set_actions_enabled(not self._loading and self._listing is not None)
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.use_button.disabled = not enabled

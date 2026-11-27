@@ -108,6 +108,7 @@ class FakeView:
         self.recents: list[tuple[Path, ...]] = []
         self.errors: list[WorkdirFailure] = []
         self.loading = 0
+        self.loading_states: list[bool] = []
 
     def render(self, listing: DirectoryListing, recent: tuple[Path, ...] = ()) -> None:
         self.listings.append(listing)
@@ -117,8 +118,9 @@ class FakeView:
     def set_error(self, failure: WorkdirFailure) -> None:
         self.errors.append(failure)
 
-    def set_loading(self) -> None:
-        self.loading += 1
+    def set_loading(self, loading: bool = True) -> None:
+        self.loading += 1 if loading else 0
+        self.loading_states.append(loading)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -652,6 +654,87 @@ async def test_presenter_select_failure_does_not_navigate(tmp_path: Path) -> Non
 
     assert view.errors[-1].kind is WorkdirFailureKind.OUTSIDE_ROOT
     assert navigations == []
+
+
+async def test_presenter_load_clears_loading_on_success_and_failure(tmp_path: Path) -> None:
+    presenter, view, _ = _make_presenter(tmp_path)
+
+    await presenter.load(tmp_path)
+
+    assert view.loading_states[-1] is False
+
+    await presenter.load(tmp_path.parent)
+
+    assert view.errors[-1].kind is WorkdirFailureKind.OUTSIDE_ROOT
+    assert view.loading_states[-1] is False
+
+
+async def test_presenter_select_clears_loading_on_every_terminal_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    presenter, view, _ = _make_presenter(tmp_path)
+    await presenter.load(repo)
+    view.loading_states.clear()
+
+    await presenter.select(repo)
+
+    assert view.loading_states == [True, False]
+    assert view.loading_states[-1] is False
+
+    view.loading_states.clear()
+
+    await presenter.select(tmp_path.parent)
+
+    assert view.errors[-1].kind is WorkdirFailureKind.OUTSIDE_ROOT
+    assert view.loading_states == [True, False]
+
+
+async def test_two_consecutive_list_selects_keep_the_cta_enabled(tmp_path: Path) -> None:
+    first = tmp_path / "primero"
+    first.mkdir()
+    (first / ".git").mkdir()
+    second = tmp_path / "segundo"
+    second.mkdir()
+    (second / ".git").mkdir()
+    state = FakePage()
+    store = FakeWorkdirStore()
+    controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
+    navigations: list[str] = []
+
+    async def navigate() -> None:
+        navigations.append("chat")
+
+    screen = build_explorer_screen(
+        cast(ft.Page, state),
+        on_back=lambda: None,
+        on_select=lambda path: None,
+        on_enter=lambda path: None,
+        on_create=lambda name, init_git: None,
+        on_rename=lambda path, new_name: None,
+        on_delete=lambda path: None,
+        on_retry=lambda: None,
+    )
+    presenter = ExplorerPresenter(controller, screen, on_selected=navigate)
+
+    # 1st list select: browse the folder (set_loading) then use the CTA.
+    await presenter.load(first)
+    assert screen.listing is not None
+    assert screen.use_button.disabled is False
+
+    await presenter.select(first)
+    assert screen.use_button.disabled is False
+    assert navigations == ["chat"]
+    assert store.settings["workdir"] == str(first.resolve())
+
+    # Back in the chat, reopen and repeat: the 2nd list select must not block.
+    await presenter.load(second)
+    assert screen.use_button.disabled is False
+
+    await presenter.select(second)
+    assert screen.use_button.disabled is False
+    assert navigations == ["chat", "chat"]
+    assert store.settings["workdir"] == str(second.resolve())
 
 
 async def test_non_git_continue_returns_to_chat(tmp_path: Path) -> None:

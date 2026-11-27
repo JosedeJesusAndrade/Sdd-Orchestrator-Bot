@@ -103,7 +103,7 @@ class ExplorerView(Protocol):
 
     def set_error(self, failure: WorkdirFailure) -> None: ...
 
-    def set_loading(self) -> None: ...
+    def set_loading(self, loading: bool = True) -> None: ...
 
 
 class ExplorerPresenter:
@@ -135,21 +135,30 @@ class ExplorerPresenter:
         """Browse ``path`` and render the listing or its typed failure."""
         target = Path(path)
         self._last_attempt = target
-        self._view.set_loading()
-        result = await self._controller.list_dir(target)
-        if isinstance(result, WorkdirFailure):
-            self._view.set_error(result)
-            return
-        await self._show(result)
+        self._view.set_loading(True)
+        try:
+            result = await self._controller.list_dir(target)
+            if isinstance(result, WorkdirFailure):
+                self._view.set_error(result)
+                return
+            await self._show(result)
+        finally:
+            # Every terminal path (success, failure and exception) must clear the
+            # in-flight state so the CTA/actions never stay stuck disabled.
+            self._view.set_loading(False)
 
     async def select(self, path: Path | str) -> None:
         """Persist ``path`` as the workdir, refresh then return to the chat."""
-        result = await self._controller.select(path)
-        if isinstance(result, WorkdirFailure):
-            self._view.set_error(result)
-            return
-        await self._show_refreshed()
-        await self._on_selected()
+        self._view.set_loading(True)
+        try:
+            result = await self._controller.select(path)
+            if isinstance(result, WorkdirFailure):
+                self._view.set_error(result)
+                return
+            await self._show_refreshed()
+            await self._on_selected()
+        finally:
+            self._view.set_loading(False)
 
     async def create(self, name: str, init_git: bool) -> None:
         """Create a child under the directory the view is browsing."""
