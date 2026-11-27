@@ -135,8 +135,10 @@ class ExplorerPresenter:
         """Browse ``path`` and render the listing or its typed failure."""
         target = Path(path)
         self._last_attempt = target
-        self._view.set_loading(True)
         try:
+            # Disable the actions *inside* the guard: if the initial flush
+            # raises (Flet re-mount patch), the ``finally`` still re-enables.
+            self._view.set_loading(True)
             result = await self._controller.list_dir(target)
             if isinstance(result, WorkdirFailure):
                 self._view.set_error(result)
@@ -149,8 +151,9 @@ class ExplorerPresenter:
 
     async def select(self, path: Path | str) -> None:
         """Persist ``path`` as the workdir, refresh then return to the chat."""
-        self._view.set_loading(True)
         try:
+            # See ``load``: the disable must not precede the guarded block.
+            self._view.set_loading(True)
             result = await self._controller.select(path)
             if isinstance(result, WorkdirFailure):
                 self._view.set_error(result)

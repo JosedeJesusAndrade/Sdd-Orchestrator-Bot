@@ -15,6 +15,7 @@ non-git directory only persists after the ``Continuar`` confirmation.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -48,6 +49,8 @@ from flet_app.ui_strings import (
     workdir_failure_copy,
 )
 from services.workdir_service import DirectoryEntry, DirectoryListing, WorkdirFailure
+
+logger = logging.getLogger(__name__)
 
 
 class ExplorerScreen:
@@ -165,12 +168,12 @@ class ExplorerScreen:
         """Repaint the breadcrumb + recent shortcuts + list for a listing."""
         self._render_listing(listing)
         self._render_recent(recent)
-        self._page.update()
+        self._flush()
 
     def set_error(self, failure: WorkdirFailure) -> None:
         """Repaint the typed failure copy, keeping any last listing browsable."""
         self._render_failure(failure)
-        self._page.update()
+        self._flush()
 
     def set_loading(self, loading: bool = True) -> None:
         """Toggle the in-flight state (actions disabled only while it lasts).
@@ -182,7 +185,20 @@ class ExplorerScreen:
         """
         self._loading = loading
         self._refresh_actions()
-        self._page.update()
+        self._flush()
+
+    def _flush(self) -> None:
+        """Push the view to the client, never letting a patch error leak.
+
+        Flet serialises the control tree on every ``Page.update()`` and that
+        patch can raise when a re-mounted control is involved. A failed flush
+        must not abort the caller between disabling and re-enabling the actions:
+        the model is already consistent and the next flush resyncs the client.
+        """
+        try:
+            self._page.update()
+        except Exception:
+            logger.debug("explorer flush failed", exc_info=True)
 
     def _render_listing(self, listing: DirectoryListing) -> None:
         self._listing = listing

@@ -11,6 +11,7 @@ Two layers, mirroring the split the refactor introduced:
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -67,6 +68,28 @@ class FakePage:
         while self.tasks:
             handler, args = self.tasks.pop(0)
             await handler(*args)
+
+
+class FlakyPage(FakePage):
+    """``FakePage`` that can fail the NEXT flush once (models a Flet patch error).
+
+    Flet serialises the control tree on every ``Page.update()``; a re-mounted
+    control can make that patch raise. This double lets a test pin the contract
+    that such a transient flush error must never wedge the explorer actions.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_next = False
+
+    def fail_next_update(self) -> None:
+        self._fail_next = True
+
+    def update(self, *controls: ft.Control) -> None:
+        if self._fail_next:
+            self._fail_next = False
+            raise RuntimeError("flet patch failed")
+        super().update(*controls)
 
 
 class Calls:
@@ -735,6 +758,118 @@ async def test_two_consecutive_list_selects_keep_the_cta_enabled(tmp_path: Path)
     assert screen.use_button.disabled is False
     assert navigations == ["chat", "chat"]
     assert store.settings["workdir"] == str(second.resolve())
+
+
+async def test_second_list_select_via_the_view_and_host_keeps_the_cta_usable(
+    tmp_path: Path,
+) -> None:
+    """End-to-end (view + host): reopen, browse a 2nd dir, CTA stays usable."""
+    first = tmp_path / "primero"
+    first.mkdir()
+    (first / ".git").mkdir()
+    second = tmp_path / "segundo"
+    second.mkdir()
+    (second / ".git").mkdir()
+
+    state = FakePage()
+    store = FakeWorkdirStore()
+    controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
+    chat = ft.Container(ft.Text("chat"))
+    host = ScreenHost(cast(ft.Page, state), chat)
+
+    async def navigate() -> None:
+        await host.show(chat)
+
+    screen = build_explorer_screen(
+        cast(ft.Page, state),
+        on_back=lambda: None,
+        on_select=lambda path: state.run_task(presenter.select, path),
+        on_enter=lambda path: state.run_task(presenter.load, path),
+        on_create=lambda name, init_git: None,
+        on_rename=lambda path, new_name: None,
+        on_delete=lambda path: None,
+        on_retry=lambda: state.run_task(presenter.retry),
+    )
+    presenter = ExplorerPresenter(controller, screen, on_selected=navigate)
+
+    async def open_explorer() -> None:
+        await presenter.open()
+        await host.show(screen.control)
+
+    # 1st visit: open the flat list, enter "primero", press the CTA.
+    state.run_task(open_explorer)
+    await state.drain()
+    assert host.control.content is screen.control
+    assert screen.use_button.disabled is False
+
+    cast(Callable[[object], None], _entry_row(screen, "primero").on_click)(None)
+    await state.drain()
+    assert screen.use_button.disabled is False
+
+    cast(Callable[[object], None], screen.use_button.on_click)(None)
+    await state.drain()
+    assert screen.use_button.disabled is False
+
+    # Back in the chat: reopen and change directory again via the flat list.
+    state.run_task(open_explorer)
+    await state.drain()
+    assert host.control.content is screen.control
+    assert screen.use_button.disabled is False
+
+    cast(Callable[[object], None], _entry_row(screen, "segundo").on_click)(None)
+    await state.drain()
+
+    assert screen.path == second.resolve()
+    assert screen.use_button.disabled is False
+
+
+async def test_flush_failure_on_the_second_list_load_does_not_wedge_the_cta(
+    tmp_path: Path,
+) -> None:
+    """A transient Flet flush error while disabling must not leave the CTA dead.
+
+    ``ExplorerPresenter.load`` used to call ``set_loading(True)`` *before* its
+    ``try`` block. When the page flush raised (something that happens when a
+    re-mounted control is patched), the coroutine aborted before the ``finally``
+    could re-enable the actions: ``_loading`` stayed ``True`` and the CTA stayed
+    disabled forever on the SECOND list change. This is the reproduction.
+    """
+    first = tmp_path / "primero"
+    first.mkdir()
+    (first / ".git").mkdir()
+    second = tmp_path / "segundo"
+    second.mkdir()
+    (second / ".git").mkdir()
+
+    page = FlakyPage()
+    store = FakeWorkdirStore()
+    controller = ExplorerController(WorkdirService(store, home=tmp_path), _KEY)
+    screen = build_explorer_screen(
+        cast(ft.Page, page),
+        on_back=lambda: None,
+        on_select=lambda path: None,
+        on_enter=lambda path: None,
+        on_create=lambda name, init_git: None,
+        on_rename=lambda path, new_name: None,
+        on_delete=lambda path: None,
+        on_retry=lambda: None,
+    )
+    presenter = ExplorerPresenter(controller, screen, on_selected=_noop_navigate)
+
+    # 1st visit works.
+    await presenter.load(first)
+    assert screen.use_button.disabled is False
+    await presenter.select(first)
+    assert screen.use_button.disabled is False
+
+    # Reopen (the screen gets re-mounted) and change directory a 2nd time.
+    await presenter.open()
+    page.fail_next_update()
+    with contextlib.suppress(RuntimeError):
+        await presenter.load(second)
+
+    assert screen.listing is not None
+    assert screen.use_button.disabled is False
 
 
 async def test_non_git_continue_returns_to_chat(tmp_path: Path) -> None:
