@@ -30,6 +30,11 @@ def model_display_name(model: str) -> str:
     return tail.title() if tail else model
 
 
+def _edit_icon(icon: ft.IconData) -> ft.Icon:
+    """The pencil glyph inside the CHECK<->EDIT ``AnimatedSwitcher``."""
+    return ft.Icon(icon, size=DS.sizes.icon_md, color=DS.colors.text_primary)
+
+
 @dataclass
 class TopBar:
     """The assembled bar plus the mutable model label and pencil button."""
@@ -37,13 +42,19 @@ class TopBar:
     control: ft.Container
     model_text: ft.Text
     edit_button: ft.IconButton
+    edit_icon_switcher: ft.AnimatedSwitcher
 
     def set_model(self, model: str) -> None:
         self.model_text.value = model_display_name(model)
 
     def set_edit_mode(self, editing: bool) -> None:
-        """Reflect edit mode on the pencil (icon + tooltip)."""
-        self.edit_button.icon = ft.Icons.CHECK if editing else ft.Icons.EDIT
+        """Reflect edit mode on the pencil (CHECK<->EDIT morph + tooltip).
+
+        The icon swap goes through the ``AnimatedSwitcher`` (``fast_ms``) rather
+        than mutating an ``IconButton.icon`` literal, so the toggle animates.
+        """
+        icon = ft.Icons.CHECK if editing else ft.Icons.EDIT
+        self.edit_icon_switcher.content = _edit_icon(icon)
         self.edit_button.tooltip = "Listo" if editing else "Renombrar sesiones"
 
 
@@ -99,10 +110,15 @@ def build_top_bar(
         if on_edit is not None:
             on_edit()
 
+    edit_icon_switcher = ft.AnimatedSwitcher(
+        content=_edit_icon(ft.Icons.EDIT),
+        duration=DS.motion.fast_ms,
+        switch_in_curve=DS.motion.curve,
+        switch_out_curve=DS.motion.curve,
+    )
+
     edit_button = ft.IconButton(
-        icon=ft.Icons.EDIT,
-        icon_color=DS.colors.text_primary,
-        icon_size=DS.sizes.icon_md,
+        icon=edit_icon_switcher,
         tooltip="Renombrar sesiones",
         disabled=on_edit is None,
         on_click=handle_edit,
@@ -146,4 +162,9 @@ def build_top_bar(
             bottom=DS.spacing.md,
         ),
     )
-    return TopBar(control=control, model_text=model_text, edit_button=edit_button)
+    return TopBar(
+        control=control,
+        model_text=model_text,
+        edit_button=edit_button,
+        edit_icon_switcher=edit_icon_switcher,
+    )

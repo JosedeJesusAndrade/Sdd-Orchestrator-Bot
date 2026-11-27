@@ -100,7 +100,7 @@ def test_top_bar_wires_new_chat_and_edit_without_an_avatar() -> None:
     )
 
     new_chat = _icon_button(top_bar.control, ft.Icons.ADD_COMMENT)
-    edit = _icon_button(top_bar.control, ft.Icons.EDIT)
+    edit = top_bar.edit_button
     cast(Callable[[object], None], new_chat.on_click)(None)
     cast(Callable[[object], None], edit.on_click)(None)
 
@@ -109,14 +109,19 @@ def test_top_bar_wires_new_chat_and_edit_without_an_avatar() -> None:
     assert not any(isinstance(c, ft.CircleAvatar) for c in _walk(top_bar.control))
 
 
-def test_top_bar_edit_mode_swaps_the_pencil_icon() -> None:
+def test_top_bar_edit_mode_morphs_the_pencil_icon_over_fast_ms() -> None:
     top_bar = build_top_bar("deepseek/deepseek-flash", on_edit=lambda: None)
 
+    # W3: the pencil swap animates through the ``fast_ms`` AnimatedSwitcher.
+    assert top_bar.edit_icon_switcher.duration == DS.motion.fast_ms
+
     top_bar.set_edit_mode(True)
-    assert top_bar.edit_button.icon == ft.Icons.CHECK
+    assert cast(ft.Icon, top_bar.edit_icon_switcher.content).icon == ft.Icons.CHECK
+    assert top_bar.edit_button.tooltip == "Listo"
 
     top_bar.set_edit_mode(False)
-    assert top_bar.edit_button.icon == ft.Icons.EDIT
+    assert cast(ft.Icon, top_bar.edit_icon_switcher.content).icon == ft.Icons.EDIT
+    assert top_bar.edit_button.tooltip == "Renombrar sesiones"
 
 
 def test_chat_screen_reset_clears_turns_and_restores_the_welcome() -> None:

@@ -151,7 +151,23 @@ class Sizes:
 
 @dataclass(frozen=True, slots=True)
 class Motion:
-    """Animation durations (ms) and the shared easing curve."""
+    """Animation durations (ms) and the shared easing curve.
+
+    Applied tokens:
+
+    - ``fast_ms``: the pencil CHECK<->EDIT morph (the edit-mode toggle, via an
+      ``AnimatedSwitcher`` in ``top_bar``).
+    - ``send_ms``: the composer send<->cancel morph.
+    - ``slow_ms``: the single search shimmer sweep.
+    - ``welcome_ms``: the welcome overlay fade.
+
+    ``drawer_ms`` is the *intended* drawer slide duration, but it is **not**
+    applied to the native ``ft.NavigationDrawer``: Flet 1.0.3's control exposes
+    no duration/curve/animation props, so the slide timing belongs to Flutter's
+    own ``NavigationDrawer`` and cannot be overridden. The token is kept
+    honest and reserved for a future custom overlay drawer that animates its
+    own offset.
+    """
 
     fast_ms: int = 120
     drawer_ms: int = 220
