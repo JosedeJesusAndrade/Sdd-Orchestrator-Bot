@@ -101,7 +101,11 @@ async def test_set_persists_and_get_reflects_it(tmp_path: Path) -> None:
     value = await service.set(conv(42), "workdir", str(project))
 
     assert value == str(project.resolve())
-    assert store.set_calls == [(conv(42), "workdir", str(project.resolve()))]
+    assert store.set_calls[0] == (conv(42), "workdir", str(project.resolve()))
+    assert [call[:2] for call in store.set_calls] == [
+        (conv(42), "workdir"),
+        (conv(42), "recent_workdirs"),
+    ]
     assert (await service.get(conv(42))).workdir == str(project.resolve())
 
 
@@ -281,7 +285,11 @@ async def test_set_workdir_delegates_to_select(tmp_path: Path) -> None:
     value = await service.set(conv(42), "workdir", str(project))
 
     assert value == str(project.resolve())
-    assert store.set_calls == [(conv(42), "workdir", str(project.resolve()))]
+    assert store.set_calls[0] == (conv(42), "workdir", str(project.resolve()))
+    assert [call[:2] for call in store.set_calls] == [
+        (conv(42), "workdir"),
+        (conv(42), "recent_workdirs"),
+    ]
 
 
 async def test_set_workdir_non_git_is_accepted(tmp_path: Path) -> None:

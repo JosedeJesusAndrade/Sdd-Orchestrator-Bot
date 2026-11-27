@@ -792,3 +792,13 @@ async def test_explorer_select_persists_and_refreshes_the_selected_dir(tmp_path:
     assert isinstance(listing, DirectoryListing)
     assert listing.path == project.resolve()
     assert [entry.name for entry in listing.entries] == ["file.txt"]
+
+
+async def test_explorer_recent_returns_the_recorded_paths(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    controller = _explorer(tmp_path)
+
+    await controller.select(project)
+
+    assert await controller.recent() == (project.resolve(),)

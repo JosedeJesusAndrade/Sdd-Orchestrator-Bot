@@ -488,6 +488,69 @@ async def test_select_outside_root(home: Path, store: SessionStore) -> None:
     assert await store.get_chat_setting(KEY, "workdir") is None
 
 
+# recent workdirs
+
+
+async def test_select_records_the_directory_as_recent(home: Path, store: SessionStore) -> None:
+    proj = home / "proj"
+    proj.mkdir()
+
+    await _v2(store, home).select(KEY, proj)
+
+    assert await _v2(store, home).recent(KEY) == (proj,)
+
+
+async def test_select_failure_does_not_record_recent(home: Path, store: SessionStore) -> None:
+    await _v2(store, home).select(KEY, home / "missing")
+
+    assert await _v2(store, home).recent(KEY) == ()
+
+
+async def test_record_recent_is_newest_first_and_deduped(home: Path, store: SessionStore) -> None:
+    service = _v2(store, home)
+    first = home / "uno"
+    second = home / "dos"
+    first.mkdir()
+    second.mkdir()
+
+    await service.record_recent(KEY, first)
+    await service.record_recent(KEY, second)
+    await service.record_recent(KEY, first)
+
+    assert await service.recent(KEY) == (first, second)
+
+
+async def test_record_recent_caps_at_five(home: Path, store: SessionStore) -> None:
+    service = _v2(store, home)
+    created: list[Path] = []
+    for index in range(7):
+        folder = home / f"d{index}"
+        folder.mkdir()
+        created.append(folder)
+        await service.record_recent(KEY, folder)
+
+    assert await service.recent(KEY) == tuple(reversed(created[2:]))
+
+
+async def test_recent_survives_a_fresh_store(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions.json"
+    home = tmp_path / "home"
+    home.mkdir()
+    proj = home / "proj"
+    proj.mkdir()
+    await WorkdirService(SessionStore(sessions), root=home, home=home).select(KEY, proj)
+
+    reloaded = SessionStore(sessions)
+
+    assert await reloaded.get_chat_setting(KEY, "recent_workdirs") == [str(proj)]
+
+
+async def test_recent_ignores_corrupt_setting(home: Path, store: SessionStore) -> None:
+    await store.set_chat_setting(KEY, "recent_workdirs", "not-a-list")
+
+    assert await _v2(store, home).recent(KEY) == ()
+
+
 # rename
 
 

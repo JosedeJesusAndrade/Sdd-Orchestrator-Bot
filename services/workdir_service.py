@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 
 from services.effective_workdir import env_fallback_workdir
 from services.workdir_browser import WorkdirBrowser
+from services.workdir_contract import MAX_RECENT_WORKDIRS, RECENT_WORKDIRS_SETTING
 from services.workdir_contract import WORKDIR_SETTING as WORKDIR_SETTING
 from services.workdir_contract import DirectoryEntry as DirectoryEntry
 from services.workdir_contract import DirectoryListing as DirectoryListing
@@ -345,5 +346,36 @@ class WorkdirService:
     async def select(
         self, conversation_key: ConversationKey, path: Path | str
     ) -> DirectoryEntry | WorkdirFailure:
-        """Validate ``path`` and persist it as the effective workdir (WD-05)."""
-        return await self._mutator.select(conversation_key, path)
+        """Validate ``path``, persist it as the workdir (WD-05) and record it."""
+        result = await self._mutator.select(conversation_key, path)
+        if not isinstance(result, WorkdirFailure):
+            await self.record_recent(conversation_key, result.path)
+        return result
+
+    # ── Recent workdirs (newest first, de-duped, capped) ───────────────
+
+    async def record_recent(
+        self, conversation_key: ConversationKey, path: Path | str
+    ) -> tuple[Path, ...]:
+        """Push ``path`` to the front of the recent list and persist it."""
+        target = str(path)
+        existing = [str(item) for item in await self._read_recent(conversation_key)]
+        merged = [target, *(item for item in existing if item != target)]
+        capped = merged[:MAX_RECENT_WORKDIRS]
+        await self._store.set_chat_setting(conversation_key, RECENT_WORKDIRS_SETTING, capped)
+        return tuple(Path(item) for item in capped)
+
+    async def recent(self, conversation_key: ConversationKey) -> tuple[Path, ...]:
+        """Return the recorded recent workdirs, newest first."""
+        return await self._read_recent(conversation_key)
+
+    async def _read_recent(self, conversation_key: ConversationKey) -> tuple[Path, ...]:
+        """Read + sanitize the persisted recent list (never raises)."""
+        raw = await self._store.get_chat_setting(conversation_key, RECENT_WORKDIRS_SETTING, [])
+        if not isinstance(raw, list):
+            return ()
+        seen: list[str] = []
+        for item in raw:
+            if isinstance(item, str) and item not in seen:
+                seen.append(item)
+        return tuple(Path(item) for item in seen[:MAX_RECENT_WORKDIRS])

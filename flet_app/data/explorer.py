@@ -41,6 +41,8 @@ class WorkdirExplorerPort(Protocol):
         self, conversation_key: ConversationKey, path: Path | str
     ) -> DirectoryEntry | WorkdirFailure: ...
 
+    async def recent(self, conversation_key: ConversationKey) -> tuple[Path, ...]: ...
+
 
 class ExplorerController:
     """Drive directory browsing and CRUD without widgets.
@@ -66,6 +68,10 @@ class ExplorerController:
     def roots(self) -> tuple[Path, ...]:
         """The explorer's roots (home on every platform)."""
         return self._workdir.roots()
+
+    async def recent(self) -> tuple[Path, ...]:
+        """The conversation's recently selected workdirs, newest first."""
+        return await self._workdir.recent(self._key)
 
     async def list_dir(self, path: Path | str) -> DirectoryListing | WorkdirFailure:
         """List ``path`` and remember the result (typed failure passthrough)."""

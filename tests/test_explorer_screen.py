@@ -21,7 +21,12 @@ from flet_app.core.navigation import ScreenHost
 from flet_app.data.explorer import ExplorerController
 from flet_app.main import ExplorerPresenter
 from flet_app.screens.explorer_screen import ExplorerScreen, build_explorer_screen
-from flet_app.ui_strings import NON_GIT_CANCEL, NON_GIT_CONTINUE, workdir_failure_copy
+from flet_app.ui_strings import (
+    EXPLORER_RECENT,
+    NON_GIT_CANCEL,
+    NON_GIT_CONTINUE,
+    workdir_failure_copy,
+)
 from services.conversation import ConversationKey
 from services.workdir_failures import WorkdirFailure, WorkdirFailureKind
 from services.workdir_service import (
@@ -100,11 +105,13 @@ class FakeView:
     def __init__(self) -> None:
         self.path: Path | None = None
         self.listings: list[DirectoryListing] = []
+        self.recents: list[tuple[Path, ...]] = []
         self.errors: list[WorkdirFailure] = []
         self.loading = 0
 
-    def render(self, listing: DirectoryListing) -> None:
+    def render(self, listing: DirectoryListing, recent: tuple[Path, ...] = ()) -> None:
         self.listings.append(listing)
+        self.recents.append(tuple(recent))
         self.path = listing.path
 
     def set_error(self, failure: WorkdirFailure) -> None:
@@ -201,6 +208,14 @@ def _entry_row(screen: ExplorerScreen, name: str) -> ft.Container:
         and isinstance(c.data, DirectoryEntry)
         and c.data.name == name
     )
+
+
+def _recent_rows(screen: ExplorerScreen) -> list[ft.Container]:
+    return [
+        c
+        for c in _walk(screen.recent_view)
+        if isinstance(c, ft.Container) and isinstance(c.data, Path)
+    ]
 
 
 async def _noop_navigate() -> None:
@@ -344,6 +359,55 @@ def test_non_git_confirm_continue_asks_to_select(tmp_path: Path) -> None:
     cast(Callable[[object], None], cont.on_click)(None)
 
     assert calls.select == [plain]
+
+
+# ── Pure view: recent shortcuts (top level) ────────────────────────────
+
+
+def test_recent_section_is_hidden_when_empty(tmp_path: Path) -> None:
+    screen, _, _ = _build()
+
+    screen.render(_listing(tmp_path.resolve()))
+
+    assert screen.recent_view.visible is False
+    assert screen.recent == ()
+
+
+def test_recent_section_lists_the_paths_newest_first(tmp_path: Path) -> None:
+    first = (tmp_path / "uno").resolve()
+    second = (tmp_path / "dos").resolve()
+    screen, _, _ = _build()
+
+    screen.render(_listing(tmp_path.resolve()), (first, second))
+
+    assert screen.recent_view.visible is True
+    assert screen.recent == (first, second)
+    assert EXPLORER_RECENT in _texts(screen.recent_view)
+    assert [row.data for row in _recent_rows(screen)] == [first, second]
+
+
+def test_tapping_a_recent_selects_it(tmp_path: Path) -> None:
+    target = (tmp_path / "proyecto").resolve()
+    screen, page, calls = _build()
+    screen.render(_listing(tmp_path.resolve()), (target,))
+
+    [row] = _recent_rows(screen)
+    cast(Callable[[object], None], row.on_click)(None)
+
+    assert calls.select == [target]
+    assert calls.enter == []
+    assert page.tasks == []
+
+
+def test_rendering_a_subdirectory_hides_the_recent_section(tmp_path: Path) -> None:
+    target = (tmp_path / "proyecto").resolve()
+    screen, _, _ = _build()
+    screen.render(_listing(tmp_path.resolve()), (target,))
+
+    screen.render(_listing(target))
+
+    assert screen.recent_view.visible is False
+    assert screen.recent == ()
 
 
 # ── Pure view: typed failure copy (EX-04) ──────────────────────────────
@@ -672,3 +736,25 @@ async def test_presenter_failure_renders_and_retry_reloads(tmp_path: Path) -> No
 
     assert len(view.errors) == 2
     assert view.loading >= 3
+
+
+async def test_presenter_feeds_recent_folders_at_the_root(tmp_path: Path) -> None:
+    target = tmp_path / "proyecto"
+    target.mkdir()
+    presenter, view, store = _make_presenter(tmp_path)
+    store.settings["recent_workdirs"] = [str(target)]
+
+    await presenter.open()
+
+    assert view.recents[-1] == (target,)
+
+
+async def test_presenter_omits_recent_folders_inside_a_subdirectory(tmp_path: Path) -> None:
+    target = tmp_path / "proyecto"
+    target.mkdir()
+    presenter, view, store = _make_presenter(tmp_path)
+    store.settings["recent_workdirs"] = [str(target)]
+
+    await presenter.load(target)
+
+    assert view.recents[-1] == ()

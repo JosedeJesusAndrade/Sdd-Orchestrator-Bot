@@ -99,7 +99,7 @@ class ExplorerView(Protocol):
     @property
     def path(self) -> Path | None: ...
 
-    def render(self, listing: DirectoryListing) -> None: ...
+    def render(self, listing: DirectoryListing, recent: tuple[Path, ...] = ()) -> None: ...
 
     def set_error(self, failure: WorkdirFailure) -> None: ...
 
@@ -140,7 +140,7 @@ class ExplorerPresenter:
         if isinstance(result, WorkdirFailure):
             self._view.set_error(result)
             return
-        self._show(result)
+        await self._show(result)
 
     async def select(self, path: Path | str) -> None:
         """Persist ``path`` as the workdir, refresh then return to the chat."""
@@ -148,7 +148,7 @@ class ExplorerPresenter:
         if isinstance(result, WorkdirFailure):
             self._view.set_error(result)
             return
-        self._show_refreshed()
+        await self._show_refreshed()
         await self._on_selected()
 
     async def create(self, name: str, init_git: bool) -> None:
@@ -157,37 +157,45 @@ class ExplorerPresenter:
         if parent is None:
             return
         result = await self._controller.create_child(parent, name, init_git=init_git)
-        self._after_mutation(result)
+        await self._after_mutation(result)
 
     async def rename(self, path: Path, new_name: str) -> None:
         """Rename the directory at ``path`` then refresh its parent."""
         result = await self._controller.rename(path, new_name)
-        self._after_mutation(result)
+        await self._after_mutation(result)
 
     async def delete(self, path: Path) -> None:
         """Delete the directory at ``path`` then refresh its parent."""
         result = await self._controller.delete(path)
-        self._after_mutation(result)
+        await self._after_mutation(result)
 
     async def retry(self) -> None:
         """Re-attempt the last browse target (only after a failure)."""
         if self._last_attempt is not None:
             await self.load(self._last_attempt)
 
-    def _after_mutation(self, result: DirectoryEntry | WorkdirFailure) -> None:
+    async def _after_mutation(self, result: DirectoryEntry | WorkdirFailure) -> None:
         if isinstance(result, WorkdirFailure):
             self._view.set_error(result)
             return
-        self._show_refreshed()
+        await self._show_refreshed()
 
-    def _show_refreshed(self) -> None:
+    async def _show_refreshed(self) -> None:
         listing = self._controller.listing
         if isinstance(listing, DirectoryListing):
-            self._show(listing)
+            await self._show(listing)
 
-    def _show(self, listing: DirectoryListing) -> None:
+    async def _show(self, listing: DirectoryListing) -> None:
         self._last_attempt = listing.path
-        self._view.render(listing)
+        recent = await self._recent_for(listing)
+        self._view.render(listing, recent)
+
+    async def _recent_for(self, listing: DirectoryListing) -> tuple[Path, ...]:
+        """Recent shortcuts only at the explorer root (no clutter deeper)."""
+        roots = self._controller.roots()
+        if not roots or listing.path.resolve() != roots[0].resolve():
+            return ()
+        return await self._controller.recent()
 
 
 async def main(page: ft.Page) -> None:

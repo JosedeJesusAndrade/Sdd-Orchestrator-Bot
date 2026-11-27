@@ -22,6 +22,12 @@ if TYPE_CHECKING:
 #: Chat setting that stores the per-conversation project path.
 WORKDIR_SETTING = "workdir"
 
+#: Chat setting that stores the recently selected workdirs (newest first).
+RECENT_WORKDIRS_SETTING = "recent_workdirs"
+
+#: How many recent workdirs the explorer keeps per conversation.
+MAX_RECENT_WORKDIRS = 5
+
 
 # ── Structural port ────────────────────────────────────────────────────
 

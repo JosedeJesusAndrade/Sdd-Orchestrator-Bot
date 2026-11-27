@@ -34,6 +34,7 @@ from flet_app.ui_strings import (
     EXPLORER_GIT_BADGE,
     EXPLORER_INIT_GIT,
     EXPLORER_NEW_FOLDER,
+    EXPLORER_RECENT,
     EXPLORER_RENAME,
     EXPLORER_RENAME_TITLE,
     EXPLORER_SAVE,
@@ -76,12 +77,18 @@ class ExplorerScreen:
         self._listing: DirectoryListing | None = None
         self._failure: WorkdirFailure | None = None
         self._path: Path | None = None
+        self._recent: tuple[Path, ...] = ()
 
         self.breadcrumb = ft.Row(
             controls=[],
             spacing=DS.spacing.xxs,
             scroll=ft.ScrollMode.AUTO,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self.recent_view = ft.Column(
+            controls=[],
+            spacing=DS.spacing.xxs,
+            visible=False,
         )
         self.entries_view = ft.ListView(
             expand=True,
@@ -146,11 +153,17 @@ class ExplorerScreen:
         """The directory currently being browsed."""
         return self._path
 
+    @property
+    def recent(self) -> tuple[Path, ...]:
+        """The recent workdirs currently shown (empty away from the root)."""
+        return self._recent
+
     # ── Data in (fed by ``main``) ──────────────────────────────────────
 
-    def render(self, listing: DirectoryListing) -> None:
-        """Repaint the breadcrumb + list for a successful listing."""
+    def render(self, listing: DirectoryListing, recent: tuple[Path, ...] = ()) -> None:
+        """Repaint the breadcrumb + recent shortcuts + list for a listing."""
         self._render_listing(listing)
+        self._render_recent(recent)
         self._page.update()
 
     def set_error(self, failure: WorkdirFailure) -> None:
@@ -211,6 +224,67 @@ class ExplorerScreen:
             ),
             data=path,
             on_click=handle_tap,
+        )
+
+    def _render_recent(self, recent: tuple[Path, ...]) -> None:
+        self._recent = tuple(recent)
+        if not recent:
+            self.recent_view.controls = []
+            self.recent_view.visible = False
+            return
+        self.recent_view.controls = [
+            self._recent_header(),
+            *(self._recent_row(path) for path in recent),
+        ]
+        self.recent_view.visible = True
+
+    def _recent_header(self) -> ft.Control:
+        return ft.Container(
+            padding=ft.Padding.only(
+                left=DS.spacing.xl,
+                right=DS.spacing.xl,
+                bottom=DS.spacing.xxs,
+            ),
+            content=ft.Text(
+                value=EXPLORER_RECENT,
+                size=DS.typography.meta_size,
+                color=DS.colors.text_muted,
+            ),
+        )
+
+    def _recent_row(self, path: Path) -> ft.Control:
+        def handle_select(_: ft.Event[ft.Container]) -> None:
+            self._on_select(path)
+
+        return ft.Container(
+            data=path,
+            padding=ft.Padding.symmetric(
+                horizontal=DS.spacing.lg,
+                vertical=DS.spacing.sm,
+            ),
+            border_radius=DS.radii.tile,
+            ink=True,
+            tooltip=str(path),
+            on_click=handle_select,
+            content=ft.Row(
+                controls=[
+                    ft.Icon(
+                        ft.Icons.HISTORY,
+                        size=DS.typography.label_size,
+                        color=DS.colors.text_secondary,
+                    ),
+                    ft.Text(
+                        value=path.name or str(path),
+                        size=DS.typography.label_size,
+                        color=DS.colors.text_primary,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        expand=True,
+                    ),
+                ],
+                spacing=DS.spacing.sm,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
         )
 
     def _render_entries(self, listing: DirectoryListing) -> None:
@@ -514,6 +588,7 @@ class ExplorerScreen:
                 header,
                 breadcrumb_holder,
                 toolbar,
+                self.recent_view,
                 self.error_holder,
                 self.entries_view,
                 footer,

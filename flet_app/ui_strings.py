@@ -55,6 +55,7 @@ EXPLORER_FOLDER_NAME = "Nombre de la carpeta"
 EXPLORER_INIT_GIT = "Inicializar repositorio Git"
 EXPLORER_EMPTY = "Esta carpeta está vacía."
 EXPLORER_GIT_BADGE = "git"
+EXPLORER_RECENT = "Recientes"
 EXPLORER_CREATE = "Crear"
 EXPLORER_SAVE = "Guardar"
 CANCEL = NON_GIT_CANCEL
