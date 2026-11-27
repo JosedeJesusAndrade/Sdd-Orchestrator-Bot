@@ -1,10 +1,10 @@
-# Sdd-Orchestrator-Telegram-Bot
+# Sdd-Orchestrator-Bot
 
 Frontends de Telegram y Flet para OpenCode. Ejecuta prompts de desarrollo contra múltiples modelos (DeepSeek, MiniMax) directamente desde una conversación de Telegram, con persistencia de sesiones, internacionalización centralizada y arranque desatendido vía `/update`.
 
 ## Descripción
 
-`Sdd-Orchestrator-Telegram-Bot` es una aplicación Python que conecta Telegram con el agente OpenCode (servidor HTTP por defecto, CLI como rollback) para habilitar desarrollo asistido por IA desde dispositivos móviles. El bot recibe mensajes de texto o voz en un chat autorizado, los reenvía al backend de IA configurado y devuelve la respuesta formateada a Telegram.
+`Sdd-Orchestrator-Bot` es una aplicación Python que conecta Telegram con el agente OpenCode (servidor HTTP por defecto, CLI como rollback) para habilitar desarrollo asistido por IA desde dispositivos móviles. El bot recibe mensajes de texto o voz en un chat autorizado, los reenvía al backend de IA configurado y devuelve la respuesta formateada a Telegram.
 
 El proyecto existe para ofrecer un punto de acceso móvil a flujos de trabajo de Spec-Driven Development. En lugar de depender de una terminal local, el usuario envía prompts desde el teléfono, gestiona sesiones por chat, cambia de modelo, crea Pull Requests y actualiza el bot sin abrir una laptop.
 
@@ -36,8 +36,8 @@ La arquitectura es un **core frontend-agnóstico**: la lógica de negocio vive e
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/<owner>/Sdd-Orchestrator-Telegram-Bot.git
-cd Sdd-Orchestrator-Telegram-Bot
+git clone https://github.com/<owner>/Sdd-Orchestrator-Bot.git
+cd Sdd-Orchestrator-Bot
 ```
 
 ### 2. Crear y activar un entorno virtual
