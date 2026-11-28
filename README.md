@@ -33,13 +33,13 @@ La referencia completa de comandos está en [DOCUMENTACION.md](DOCUMENTACION.md)
 
 ## Capturas de pantalla
 
-> Marcadores de posición: captura estas tres pantallas de la aplicación en ejecución y guárdalas en `docs/screenshots/` con exactamente estos nombres.
+![Chat con renderizado de Markdown legible](docs/screenshots/chat_app.jpe)
 
-![Chat con renderizado de Markdown legible](docs/screenshots/chat.png)
+![Panel de sesiones con las sesiones recientes](docs/screenshots/sessions_history_app.jpe)
 
-![Panel de sesiones con las sesiones recientes](docs/screenshots/drawer.png)
+![Explorador de directorios con CRUD y carpetas recientes](docs/screenshots/directory_explorer_app.jpe)
 
-![Explorador de directorios con CRUD y carpetas recientes](docs/screenshots/explorer.png)
+![Selector de modelo](docs/screenshots/model_select_app.jpe)
 
 ## Funcionalidades
 
