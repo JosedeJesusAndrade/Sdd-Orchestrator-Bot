@@ -1,7 +1,7 @@
 """Regression tests for OpenCode session-ID capture.
 
 Root cause: ``execute()`` used the default output format, whose stdout only
-contains assistant text â€” never the ``ses_...`` ID. The regex in
+contains assistant text — never the ``ses_...`` ID. The regex in
 ``PromptService._capture_session_id`` could therefore never match, so every
 bot-created session stayed ``real_id=None`` and each prompt started cold.
 

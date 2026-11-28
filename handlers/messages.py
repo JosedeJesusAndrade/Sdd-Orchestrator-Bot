@@ -77,7 +77,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         if not text:
             await progress_msg.edit_text(
-                "\u274c No pude transcribir el audio. Intentá de nuevo o escribí el prompt."
+                "\u274c No pude transcribir el audio. Intenta de nuevo o escribe el prompt."
             )
             return
 
@@ -96,7 +96,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
     except PromptAlreadyRunningError:
-        await msg.reply_text("\u23f3 Ya hay un prompt en proceso. Usá /cancel para cancelarlo.")
+        await msg.reply_text("\u23f3 Ya hay un prompt en proceso. Usa /cancel para cancelarlo.")
     except Exception as e:
         # Why extra={} here? The bare "%s" formatter above meant we lost the
         # machine-readable event index and any correlated fields (chat_id,
@@ -113,7 +113,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             },
         )
         try:
-            await progress_msg.edit_text("\u274c Error al procesar el audio. Intentá de nuevo.")
+            await progress_msg.edit_text("\u274c Error al procesar el audio. Intenta de nuevo.")
         except Exception:
             log_exception(
                 "voice_error_edit_failed",
@@ -154,4 +154,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             view=TelegramChatView(container.message_sender, chat_id),
         )
     except PromptAlreadyRunningError:
-        await msg.reply_text("\u23f3 Ya hay un prompt en proceso. Usá /cancel para cancelarlo.")
+        await msg.reply_text("\u23f3 Ya hay un prompt en proceso. Usa /cancel para cancelarlo.")

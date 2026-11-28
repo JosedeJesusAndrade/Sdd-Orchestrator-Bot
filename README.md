@@ -3,9 +3,10 @@
 Una **puerta de entrada personal al desarrollo con IA**: un solo bot que conecta a tus clientes (Telegram y una interfaz gráfica en Flet) con un agente de programación por CLI. El bot se encarga del ciclo de vida del agente, de los permisos interactivos y de la continuidad de las sesiones, para que puedas dirigir trabajo real de software desde el teléfono.
 
 ![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-1114%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1123%20passing-brightgreen)
 ![mypy](https://img.shields.io/badge/mypy-strict-2A6DB2)
 ![ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)
+![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue)
 
 ## Qué es
 
@@ -33,13 +34,13 @@ La referencia completa de comandos está en [DOCUMENTACION.md](DOCUMENTACION.md)
 
 ## Capturas de pantalla
 
-![Chat con renderizado de Markdown legible](docs/screenshots/chat_app.jpe)
+![Chat con renderizado de Markdown legible](docs/screenshots/chat_app.jpg)
 
-![Panel de sesiones con las sesiones recientes](docs/screenshots/sessions_history_app.jpe)
+![Panel de sesiones con las sesiones recientes](docs/screenshots/sessions_history_app.jpg)
 
-![Explorador de directorios con CRUD y carpetas recientes](docs/screenshots/directory_explorer_app.jpe)
+![Explorador de directorios con CRUD y carpetas recientes](docs/screenshots/directory_explorer_app.jpg)
 
-![Selector de modelo](docs/screenshots/model_select_app.jpe)
+![Selector de modelo](docs/screenshots/model_select_app.jpg)
 
 ## Funcionalidades
 
@@ -145,7 +146,7 @@ Copy-Item .env.example .env   # then fill in TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID
 
 ## Estado del proyecto
 
-- ✅ **1,114 pruebas aprobadas** (2 pruebas solo para POSIX omitidas en Windows)
+- ✅ **1,123 pruebas aprobadas** (2 pruebas solo para POSIX omitidas en Windows)
 - ✅ **mypy --strict:** 0 errores en 196 archivos
 - ✅ **ruff:** lint y formato limpios
 - ✅ **3 cambios SDD archivados:** `core-isolation` (núcleo agnóstico del frontend + ADR), `flet-data-layer` (servicios, DTO y controladores headless), `flet-ui` (shell móvil centrado en el chat, panel, explorador, modo de edición y selector de modelo)
@@ -159,4 +160,6 @@ Este es un proyecto personal mantenido por un solo autor. Tiene forma de producc
 
 ## Licencia
 
-Proyecto personal. El repositorio no incluye un archivo de licencia; contacta al autor antes de redistribuir el código o usarlo en producción.
+Este proyecto se distribuye bajo la GNU General Public License v3.0. Ver [LICENSE](LICENSE).
+
+Se eligió el copyleft de la GPLv3 para que cualquier versión derivada del bot permanezca libre y disponible para la comunidad.

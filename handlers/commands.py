@@ -88,7 +88,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/pr `<título>` — Crear Pull Request en GitHub\n"
         "/update — Reiniciar bot con la última versión\n"
         "/help — Este mensaje\n\n"
-        "También podés enviar mensajes directamente o notas de voz."
+        "También puedes enviar mensajes directamente o notas de voz."
     )
 
 

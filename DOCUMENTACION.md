@@ -1,6 +1,6 @@
 # Sdd-Orchestrator-Telegram-Bot — Documentación técnica
 
-Documentación del estado real del repositorio en `main` (HEAD `862b8c0`).
+Documentación del estado real del repositorio en `main`.
 Está dirigida a quien necesita mantener, extender o desplegar el bot.
 
 > **Nombre del proyecto.** El directorio local, el remoto de GitHub
@@ -75,7 +75,7 @@ transporta prompts y respuestas.
 |---|---|---|
 | Lenguaje | Python `>=3.11` | `pyproject.toml` |
 | Bot | `python-telegram-bot>=21.0` | Probado con 22.8 |
-| GUI | `flet>=1.0` (extra `gui`) | Probado con 1.0.3 |
+| GUI | `flet==1.0.3` (extra `gui`) | Pensada primero para móvil |
 | HTTP/SSE | `httpx>=0.28` | Cliente del servidor OpenCode |
 | Orquestador | OpenCode (`server` o `cli`) | El binario se autodetecta |
 | Voz | `openai>=1.0.0` (opcional) | Whisper `whisper-1` |
@@ -120,9 +120,21 @@ Flet ─────> flet_app/main.py ──────┘
 `CoreStack` (`services/composition.py`) contiene el grafo compartido:
 `SessionStore`, `AIProviderFactory`, `PromptService`, `StatusService`,
 `HealthService`, `SessionService`, `SettingsService`, `WorkdirService`,
-`PullRequestService`, `TranscriptionService`, `AgentSessions`,
-`ConversationsService`, `start_time` y, solo en modo servidor, el manager, el
-cliente HTTP, el `PermissionPort` y el `PermissionRouter`.
+`EffectiveWorkdir`, `OpenCodeModelCatalog`, `PullRequestService`,
+`TranscriptionService`, `AgentSessions`, `ConversationsService`, `start_time` y,
+solo en modo servidor, el manager, el cliente HTTP, el `PermissionPort` y el
+`PermissionRouter`.
+
+`EffectiveWorkdir` es la única fuente de verdad del directorio de trabajo por
+conversación: resuelve una ruta con precedencia estricta (setting del chat →
+`OPENCODE_WORKDIR` → raíz del repo) y se inyecta en `PromptService`,
+`ConversationsService`, `StatusService` y `SessionService`. Ningún otro módulo
+del core referencia `OPENCODE_WORKDIR` ni `BASE_DIR` directamente.
+
+`OpenCodeModelCatalog` alimenta el selector de modelo de Flet: consulta
+`GET /config/providers`, cae a `opencode models --verbose` y, como último
+recurso, a los alias de `MODEL_ALIASES`. Cachea las opciones 300 s y recomputa
+`is_default` por conversación en cada lectura.
 
 ### 2.3 Puertos del core
 
@@ -201,9 +213,20 @@ Con `OPENCODE_BACKEND=cli`, el paso 7 usa `OpenCodeCLIBackend`: un subproceso
 | `OpenCodeServerBackend` | Transporte HTTP/SSE con permisos y streaming | `services/opencode_server_backend.py` |
 | `OpenCodeCLIBackend` | Rollback por subproceso | `services/opencode_cli_backend.py` |
 | `PermissionRouter` | Rendezvous de decisiones entre backend y UIs | `services/permission_router.py` |
+| `EffectiveWorkdir` | Resuelve el workdir efectivo por conversación | `services/effective_workdir.py` |
+| `OpenCodeModelCatalog` | Catálogo de modelos para el selector | `services/model_catalog.py` |
+| `AgentSessions` | Historial de sesiones (SQLite directo, CLI de respaldo) | `services/agent_sessions.py`, `opencode/` |
 | `MessageSender` | MarkdownV2, fallback y troceo de Telegram | `frontends/telegram/message_sender.py` |
 | `formatting/markdown.py` | Limpieza neutral de output (sin I/O) | `formatting/` |
+| `flet_app/data/` | Controladores headless (sin widgets) de la GUI | `flet_app/data/` |
 | `handlers/` | Adaptadores delgados de comandos y mensajes | `handlers/` |
+
+La capa `flet_app/data/` concentra la lógica de la GUI sin importar `flet`:
+`SidebarController`, `SessionSwitcher`, `ExplorerController`,
+`ModelSelectorController` y `StatusStripController`. Cada controlador consume
+puertos del core y publica un snapshot tipado; las vistas (`screens/`,
+`components/`) solo pintan datos y emiten callbacks. `tests/test_flet_data_boundary.py`
+impone que esa capa no importe widgets.
 
 ### 2.8 Formateo y troceo del output
 
@@ -257,6 +280,7 @@ La plantilla comentada es `.env.example`.
 | `BOT_LOG_FORMAT` | No | `text` | `text` (key=value) o `json`. Un valor inválido cae a `text` con warning. |
 | `BOT_LOG_FILE` | No | `<repo>/bot.log` | Archivo de log rotativo (5 MB, 3 backups). |
 | `EXPLORE_DB` | No | deshabilitado | `1`/`true`/`yes` explora el esquema de `opencode.db` al arrancar. |
+| `OPENCODE_DB_PATH` | No | `$XDG_DATA_HOME/opencode/opencode.db` o `~/.local/share/opencode/opencode.db` | SQLite usado por las lecturas directas de historial (tests e instalaciones a medida). |
 
 Notas:
 
@@ -338,6 +362,21 @@ Si el agente OpenCode ya soporta el modelo, no hace falta código: usa
 
 `AIProviderFactory.create()` siempre construye una instancia nueva; no hay
 singletons compartidos entre conversaciones.
+
+### 4.4 Catálogo de modelos del selector
+
+El selector de Flet no usa la lista estática de alias: `OpenCodeModelCatalog`
+lee la lista **real** de proveedores y modelos del agente. Orden de fuentes:
+
+1. `GET /config/providers` (rápido y completo); conserva solo proveedores
+   ejecutables y modelos con `status == "active"` y salida de texto.
+2. `opencode models --verbose` fuera del event loop (respaldo).
+3. Los ids canónicos de `MODEL_ALIASES`.
+4. Snapshot vacío.
+
+Las opciones se cachean 300 s y las lecturas concurrentes comparten una sola
+petición mediante un `asyncio.Lock`. `is_default` se recalcula por conversación
+en cada `list()`.
 
 ---
 
@@ -451,6 +490,21 @@ OpenCode.
 `opencode session delete <id>` con timeout de
 `INTERNAL_SUBPROCESS_TIMEOUT` (10 s). Si era la activa, cambia a la siguiente; si
 no quedan, crea `default`.
+
+### 5.9 Lectura de historial (SQLite directo)
+
+`AgentSessions` responde el historial de la GUI y de Telegram. En producción usa
+`query_opencode_db_direct` (`opencode/db.py`), que abre una conexión
+`mode=ro` de corta vida al mismo `opencode.db` del agente y responde en
+milisegundos (sin el arranque de Node de ~2 s por llamada del CLI). Si el archivo
+no existe o la consulta falla, cae a `query_opencode_db` (CLI). Todo `real_id`
+se valida con `is_valid_real_id` y cada literal se escapa con la regla `''`
+antes de interpolar el SQL.
+
+La capa de persistencia (`persistence/sessions.py`) mantiene además una caché TTL
+para `fetch_opencode_sessions()` y evita reejecutar el subproceso en cada
+handler; `invalidate_opencode_sessions_cache()` se llama desde
+`SessionService` tras cada operación que muta sesiones.
 
 ---
 
@@ -648,17 +702,40 @@ Desde la raíz del repo. El entry point también funciona con
 `flet run flet_app/main.py` (el módulo ajusta `sys.path` cuando se ejecuta como
 script).
 
-### 9.2 Pantallas y componentes
+### 9.2 Pantallas, componentes y tokens
 
-- `flet_app/screens/chat_screen.py`: top bar, greeting, conversación y composer.
-- `flet_app/screens/conversations_screen.py`: lista de conversaciones con
-  estados loading/empty/error; al abrir, adopta o cambia la sesión y carga el
-  historial.
-- `flet_app/components/`: `composer`, `greeting`, `message_bubble`, `top_bar`.
-- `flet_app/core/design_system.py`: tokens visuales.
-- `flet_app/core/navigation.py`: `ScreenHost` (swap de controles, sin router).
+- `flet_app/screens/chat_screen.py`: top bar, greeting, conversación, composer y
+  `set_edit_mode`.
+- `flet_app/screens/explorer_screen.py`: vista **pura** del explorador
+  (breadcrumb, lista plana, CRUD y CTA). Recibe datos por
+  `render`/`set_error`/`set_loading` y emite su intención por callbacks.
+- `flet_app/components/`: `app_background`, `composer`, `drawer`,
+  `footer_profile`, `greeting`, `message_bubble`, `model_picker`,
+  `search_placeholder`, `section_header`, `sidebar_tile`, `status_strip`,
+  `top_bar`.
+- `flet_app/core/design_system.py`: tokens visuales; `navigation.py`: `ScreenHost`
+  (swap de controles, sin router); `session_buckets.py`: agrupación pura por
+  fecha (hoy, ayer, últimos 7/30 días, anteriores).
+- `flet_app/ui_strings.py` y `flet_app/flet_strings.py`: copy de la GUI.
 
-### 9.3 Puertos
+### 9.3 Capa de datos headless
+
+`flet_app/data/` concentra la lógica de la GUI **sin importar `flet`**:
+
+- `sidebar.py`: `SidebarSnapshot` (contrato de datos) y `SidebarController`
+  (`load`, `select`, `new_chat`, `rename` y un `toggle` síncrono). Superpone los
+  títulos guardados para que un rename sea visible.
+- `session_switch.py`: `SessionSwitcher` (ver 9.5).
+- `explorer.py`: `ExplorerController` (navegar, CRUD, seleccionar, recientes).
+- `model_selector.py`: `ModelSelectorController` (catálogo por proveedor y
+  selección).
+- `status_strip.py` y `state.py`: `LoadState`/`Loadable` compartidos
+  (`idle` → `loading` → `ready`/`empty`/`error`).
+
+Las vistas solo pintan snapshots y emiten callbacks; `tests/test_flet_data_boundary.py`
+impone el límite.
+
+### 9.4 Puertos
 
 - `FletChatView` implementa `ChatView`; `source_label = "📱 Flet"`.
 - `FletPermissionPresenter` muestra `ft.AlertDialog` modales, uno a la vez, con
@@ -666,7 +743,46 @@ script).
 - `AllowAllGate` es la política v1: acceso físico al dispositivo.
 - La clave es **`flet:local`** (`flet_app/keys.py`), estable entre arranques.
 
-### 9.4 Warm-up y servidor compartido
+### 9.5 Sesiones recientes y cambio de sesión
+
+- `SidebarController.load()` reúne conversaciones, sesión activa, workdir
+  efectivo, modelo y perfil; `session_buckets.py` las agrupa por fecha.
+- `SessionSwitcher.switch(real_id)` **omite** la sesión que el chat ya muestra
+  (`current_real_id`) para cerrar el drawer sin recargar (BUG #2) y cachea el
+  historial por `real_id`: la primera visita lee el agente y las siguientes
+  salen sin I/O hasta que un prompt o un chat nuevo invalida la caché.
+- `SidebarController.select()` actualiza el resaltado en el snapshot sin volver a
+  consultar el historial (FD-04).
+
+### 9.6 Explorador de directorios
+
+- `ExplorerController` opera sobre `WorkdirService` v2: `list_dir`,
+  `create_child` (con `init_git`), `rename`, `delete`, `select` y `recent`.
+- `ExplorerScreen` es vista pura: tocar una fila **entra**; solo el CTA «Usar
+  esta carpeta» **selecciona**, y una carpeta sin `.git` pide confirmación. Las
+  cinco carpetas recientes se muestran solo en la raíz del explorador.
+- `ExplorerPresenter` (en `main.py`) desactiva las acciones mientras hay una
+  operación en vuelo y las reactiva en `finally`, incluidas las rutas de error.
+
+### 9.7 Modo de edición
+
+- El lápiz de la top bar entra al modo edición: los títulos ligados al bot se
+  vuelven `TextField` en línea (los huérfanos quedan de solo lectura) y el lápiz
+  pasa a confirmar.
+- `save` es el único escritor: cada título no vacío y modificado se persiste vía
+  `SidebarController.rename`; no hay autoguardado.
+- Si el rename falla, aparece un SnackBar y el modo edición **sigue activo** con
+  los valores escritos para reintentar.
+
+### 9.8 Render de Markdown
+
+- `flet_app/flet_chat_view.py` convierte cada turno con `build_markdown` y lo
+  pinta en un `ft.Markdown` dentro de una columna desplazable; `render_history`
+  reconstruye una conversación desde el historial.
+- El texto del asistente conserva encabezados, listas, código y énfasis; los
+  turnos en blanco se omiten.
+
+### 9.9 Warm-up y servidor compartido
 
 - `main()` construye el core, monta la UI y luego ejecuta `warm_up_gui()`:
   adopta o lanza el servidor antes del primer prompt.
@@ -674,12 +790,12 @@ script).
 - Al cerrar la GUI **nunca** se detiene el servidor: el bot puede compartirlo.
 - Si no hay workdir explícito para `flet:local`, la GUI lo fija a `BASE_DIR`.
 
-### 9.5 Empaquetado
+### 9.10 Empaquetado
 
 `pyproject.toml` declara el extra `gui` y los paquetes del core, e **incluye**
 `flet_app` en `[tool.setuptools].packages` junto con sus subpaquetes
-`flet_app.components`, `flet_app.core` y `flet_app.screens`. Funciona tanto en
-modo editable como en una instalación no editable.
+`flet_app.components`, `flet_app.core`, `flet_app.data` y `flet_app.screens`.
+Funciona tanto en modo editable como en una instalación no editable.
 
 ---
 
@@ -753,8 +869,8 @@ los registros propaguen a los handlers de `setup_logger()`.
 
 ### 12.1 Estado actual
 
-En `main` (HEAD `862b8c0`) la suite recolecta **714 tests** con
-`pytest --collect-only -q`.
+En `main` la suite recolecta **1,125 tests** con `pytest --collect-only -q`;
+en Windows se ejecutan **1,123** (2 pruebas exclusivas de POSIX se omiten).
 
 ```bash
 # Suite completa
@@ -774,12 +890,14 @@ Configuración en `pyproject.toml`: `asyncio_mode = "auto"`, `testpaths =
 
 | Grupo | Archivos | Qué verifica |
 |---|---|---|
-| Límite del core | `test_core_isolation_boundary.py`, `test_config_split.py`, `test_core_strings.py` | `services/` no importa frontends; config importable sin Telegram; el core no decide copy |
+| Límite del core | `test_core_isolation_boundary.py`, `test_config_split.py`, `test_core_strings.py`, `test_flet_data_boundary.py` | `services/` no importa frontends; config importable sin Telegram; el core no decide copy; `flet_app/data/` no importa widgets |
 | Caracterización | `test_characterization_*.py` (wdir, voice, session routing/info, pr, config) | La extracción no cambió comportamiento |
-| Sesiones | `test_session_store.py`, `test_session_store_migration.py`, `test_session_service.py`, `test_session_commands.py` | CRUD, migración, backup, routing tipado |
-| Backends | `test_opencode_server_backend.py`, `test_opencode_server_client.py`, `test_opencode_server_manager.py`, `test_opencode_sessions.py` | SSE, permisos, lifecycle, SQL |
+| Sesiones | `test_session_store.py`, `test_session_store_migration.py`, `test_session_service.py`, `test_session_commands.py`, `test_session_switch.py`, `test_session_capture.py`, `test_session_buckets.py` | CRUD, migración, backup, routing tipado, skip + caché, bucketing |
+| Backends | `test_opencode_server_backend.py`, `test_opencode_server_client.py`, `test_opencode_server_manager.py`, `test_opencode_sessions.py`, `test_opencode_db.py` | SSE, permisos, lifecycle, SQL directo |
+| Modelos | `test_model_catalog.py`, `test_model_picker.py` | Fuentes en cascada, caché, agrupación por proveedor |
+| Workdir | `test_workdir_service.py`, `test_workdir_paths.py`, `test_workdir_failure_copy.py`, `test_effective_workdir.py`, `test_explorer_screen.py` | Precedencia, perímetro, CRUD, recientes |
 | Permisos | `test_permission_router.py`, `test_permission_callback.py`, `test_telegram_permission_presenter.py`, `test_flet_permission_presenter.py` | Rendezvous, timeouts, presenters |
-| Flet | `test_flet_render.py`, `test_flet_lifecycle.py`, `test_conversations_screen.py`, `test_navigation.py` | Render, warm-up, pantallas |
+| Flet | `test_flet_render.py`, `test_flet_lifecycle.py`, `test_flet_data_controllers.py`, `test_edit_mode.py`, `test_navigation.py`, `test_drawer.py`, `test_status_strip.py` | Render, warm-up, controladores, modo edición, pantallas |
 | Logging | `test_log_*.py`, `test_json_formatter.py`, `test_keyvalue_formatter.py` | Formatters, propagación, request_id |
 | Servicios | `test_prompt_service_live_progress.py`, `test_workdir_service.py`, `test_pull_request_service.py`, `test_transcription_service.py`, `test_status_service.py`, `test_health_service.py`, `test_settings_service.py` | Lógica de negocio |
 | Auth | `test_authorized.py`, `test_frontend_gate.py` | Un solo camino de autorización |
@@ -982,13 +1100,20 @@ Sdd-Orchestrator-Telegram-Bot/
 │   ├── session_service.py          # CRUD/discover/adopt
 │   ├── session_commands.py         # Parser tipado de /session
 │   ├── settings_service.py         # /config
-│   ├── workdir_service.py          # /wdir
+│   ├── workdir_service.py          # /wdir (fachada)
+│   ├── workdir_browser.py          # Navegación de directorios
+│   ├── workdir_contract.py         # DTOs y errores tipados
+│   ├── workdir_failures.py         # WorkdirFailureKind
+│   ├── workdir_mutator.py          # create / rename / delete
+│   ├── workdir_paths.py            # Perímetro home y symlinks
 │   ├── pull_request_service.py     # /pr
 │   ├── transcription_service.py    # Whisper
 │   ├── status_service.py           # Datos de /status
 │   ├── health_service.py           # Datos de /health
 │   ├── conversations_service.py    # Historial de Flet
 │   ├── agent_sessions.py           # Puertos de historial
+│   ├── effective_workdir.py        # Workdir efectivo por conversación
+│   ├── model_catalog.py            # Catálogo de modelos del selector
 │   ├── ai_backend.py               # Protocol AIBackend
 │   ├── ai_provider_factory.py      # Factory de providers
 │   ├── opencode_cli_backend.py     # Rollback CLI
@@ -1019,22 +1144,26 @@ Sdd-Orchestrator-Telegram-Bot/
 │   └── ci.py                       # /pr /update /wdir
 │
 ├── flet_app/                       # Frontend Flet
-│   ├── main.py                     # Entry point
-│   ├── flet_chat_view.py           # ChatView
+│   ├── main.py                     # Entry point + composición + ExplorerPresenter
+│   ├── flet_chat_view.py           # ChatView + render de Markdown
 │   ├── flet_permission_presenter.py
-│   ├── flet_strings.py
+│   ├── edit_mode.py                # Modo edición del drawer
+│   ├── flet_strings.py             # CoreStrings de Flet
+│   ├── ui_strings.py               # Copy de la GUI
 │   ├── keys.py                     # flet:local
-│   ├── components/                 # composer, greeting, message_bubble, top_bar
-│   ├── core/                       # design_system, navigation
-│   └── screens/                    # chat_screen, conversations_screen
+│   ├── components/                 # composer, drawer, top_bar, model_picker, …
+│   ├── core/                       # design_system, navigation, session_buckets
+│   ├── data/                       # sidebar, session_switch, explorer, model_selector, state
+│   └── screens/                    # chat_screen, explorer_screen
 │
 ├── formatting/markdown.py          # Limpieza neutral de output
 ├── locales/                        # i18n (es)
 ├── opencode/                       # Cliente CLI/DB de OpenCode
 ├── persistence/sessions.py         # DAL de sessions.json
 ├── utils/                          # logging, time_formatting
-├── tests/                          # 714 tests
+├── tests/                          # 1,125 tests
 ├── docs/adr/                       # ADR 0001, 0002
+├── docs/screenshots/               # capturas de la GUI (.jpg)
 └── .github/workflows/ci.yml        # CI matrix 3.11–3.13
 ```
 
@@ -1051,5 +1180,5 @@ actuales:
 
 ---
 
-*Documentación técnica del repositorio Sdd-Orchestrator-Telegram-Bot. Estado:
-HEAD `862b8c0`, rama `main`.*
+*Documentación técnica del repositorio Sdd-Orchestrator-Bot. Estado:
+`main`.*
