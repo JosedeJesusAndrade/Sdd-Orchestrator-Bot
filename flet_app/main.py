@@ -45,6 +45,7 @@ from flet_app.edit_mode import EditMode, rename_failure_notice  # noqa: E402
 from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
+from flet_app.resilience import busy_notice  # noqa: E402
 from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
 from flet_app.screens.explorer_screen import build_explorer_screen  # noqa: E402
 from flet_app.ui_strings import TOAST_COMING_SOON  # noqa: E402
@@ -389,6 +390,19 @@ async def main(page: ft.Page) -> None:
             await view.send("⛔ No autorizado.")
             return
 
+        # Resilience: derive the busy state from the SERVER before sending. A
+        # stale busy turn (no local task) is aborted here, so the new prompt is
+        # never silently queued behind an orphan. If the server is genuinely
+        # busy, tell the user instead of freezing.
+        reconciled = await core.prompt_service.reconcile(CONVERSATION_ID)
+        notice = busy_notice(reconciled)
+        if notice is not None:
+            chat.composer.field.value = text
+            chat.composer.set_running(True)
+            page.update()
+            await view.send(notice)
+            return
+
         started = time.monotonic()
         try:
             chat.composer.field.value = ""
@@ -495,6 +509,55 @@ async def main(page: ft.Page) -> None:
         chat.conversation,
         on_first_message=chat.reveal_conversation,
     )
+
+    async def resync_history(*, force: bool) -> bool:
+        """Replace any stale partial with the REAL conversation history.
+
+        The server is the source of truth (``GET /session/{id}/message``); the
+        DB-backed seam is the fallback when the server is unreachable. ``force``
+        also wipes a leftover partial when the history turned out to be empty
+        (reconnect/restart), instead of leaving a frozen snapshot on screen.
+        """
+        messages = await core.prompt_service.load_server_history(CONVERSATION_ID)
+        if not messages:
+            active = await core.session_store.get_active_session(CONVERSATION_ID)
+            if active is not None and active.real_id:
+                try:
+                    messages = await core.conversations_service.messages(active.real_id, limit=50)
+                except Exception:
+                    logger.exception(
+                        "No se pudo cargar el historial de respaldo",
+                        extra={"event": "flet_history_fallback_failed"},
+                    )
+                    messages = None
+        if messages:
+            render_history(chat.conversation, messages)
+            chat.reveal_conversation()
+            switcher.invalidate()
+        elif force:
+            chat.reset()
+        page.update()
+        return bool(messages)
+
+    async def reconcile_and_resync(*, force: bool, reset_composer: bool = False) -> None:
+        """Abort a stale busy turn, then render the server's real history.
+
+        Called on startup and on (re)connect. If THIS process still owns a live
+        turn, it is left untouched (nothing to reconcile, no history to reload).
+        """
+        if core.prompt_service.is_local_running(CONVERSATION_ID):
+            return
+        result = await core.prompt_service.reconcile(CONVERSATION_ID)
+        await resync_history(force=force)
+        if reset_composer:
+            chat.composer.set_busy(result.busy)
+            chat.composer.set_running(result.busy)
+            page.update()
+
+    async def reconnect() -> None:
+        """A page refresh/reconnect: reconcile with the server and reload."""
+        await reconcile_and_resync(force=True, reset_composer=True)
+        await refresh_all()
 
     # Permission prompts share the router with Telegram. The Flet presenter
     # renders them as queued modal dialogs and shows the outcome as a floating
@@ -624,17 +687,37 @@ async def main(page: ft.Page) -> None:
 
     await refresh_all()
 
-    def on_page_close() -> None:
+    def on_page_close(event: object = None) -> None:
         # D5: the server lives always. The bot may be sharing this process, so
         # closing the GUI never calls ``manager.stop()``; it only logs.
         log_server_left_running(core.server_manager)
+        # Resilience: never leave the abandoned turn busy on the server. The
+        # local cancel stops the stream; the direct abort is the guarantee even
+        # if the event loop ends before the backend's scheduled abort runs.
+        try:
+            page.run_task(core.prompt_service.abort_on_disconnect, CONVERSATION_ID)
+        except Exception:
+            logger.debug(
+                "No se pudo programar el abort al desconectar",
+                extra={"event": "flet_disconnect_abort_schedule_failed"},
+            )
+
+    def on_page_connect(event: object = None) -> None:
+        # Fires on refresh / reconnect (NOT on first open): re-derive the state
+        # from the server and replace any stale partial with the real history.
+        page.run_task(reconnect)
 
     page.on_disconnect = on_page_close
     page.on_close = on_page_close
+    page.on_connect = on_page_connect
 
     # Eager warm-up AFTER the UI is mounted: adopt/spawn the shared server now
     # instead of on the first prompt, and surface a clear notice on failure.
     await warm_up_gui(view.send, core.server_manager, directory=workdir)
+
+    # Startup reconciliation: abort any turn orphaned by a previous crash and
+    # render the real history instead of an empty/partial screen.
+    await reconcile_and_resync(force=False, reset_composer=True)
 
 
 if __name__ == "__main__":

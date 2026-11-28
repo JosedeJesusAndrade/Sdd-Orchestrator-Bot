@@ -378,6 +378,35 @@ async def test_health_true_on_200_and_false_on_401(
     assert await unauthorized.health() is False
 
 
+async def test_get_session_status_reads_the_busy_map(
+    make_client: Callable[..., OpenCodeServerClient],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth_and_directory(request)
+        assert request.url.path == "/session/status"
+        return httpx.Response(200, json={"ses_1": {"type": "busy"}})
+
+    client = make_client(handler)
+
+    assert await client.get_session_status("ses_1") == "busy"
+
+
+async def test_get_session_status_absent_means_idle(
+    make_client: Callable[..., OpenCodeServerClient],
+) -> None:
+    client = make_client(lambda _request: httpx.Response(200, json={}))
+
+    assert await client.get_session_status("ses_1") == "idle"
+
+
+async def test_get_session_status_returns_none_when_endpoint_is_unsupported(
+    make_client: Callable[..., OpenCodeServerClient],
+) -> None:
+    client = make_client(lambda _request: httpx.Response(404))
+
+    assert await client.get_session_status("ses_1") is None
+
+
 async def test_abort_returns_false_on_404(
     make_client: Callable[..., OpenCodeServerClient],
 ) -> None:

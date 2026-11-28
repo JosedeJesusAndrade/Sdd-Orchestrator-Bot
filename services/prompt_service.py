@@ -38,9 +38,11 @@ import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core_config import OPENCODE_TIMEOUT, PROGRESS_UPDATE_INTERVAL
+from services.agent_sessions import Message, MessagePart
 from services.effective_workdir import env_fallback_workdir
 from utils.logging import get_module_logger, log_exception
 
@@ -49,14 +51,33 @@ if TYPE_CHECKING:
     from services.ai_provider_factory import ProviderFactoryPort
     from services.chat_view import ChatView, ConversationKey, CoreStrings, ProgressHandle
     from services.effective_workdir import EffectiveWorkdir
+    from services.opencode_server.client import OpenCodeServerClient
     from services.session_service import SessionService
     from services.session_store import SessionInfo, SessionStorePort
 
 logger = get_module_logger(__name__)
 
+#: Server status types that mean a turn is still in flight.
+_BUSY_STATUSES = frozenset({"busy", "retry"})
+
 
 class PromptAlreadyRunningError(Exception):
     """Raised when a prompt is already running for a chat."""
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Outcome of a server-side state reconciliation.
+
+    ``busy`` is TRUE only when the SERVER reports an active turn. A stale busy
+    turn (server busy, no local task) is aborted and reported as not busy, so the
+    next prompt is never queued behind an orphan.
+    """
+
+    session_id: str | None = None
+    server_status: str | None = None
+    aborted_stale: bool = False
+    busy: bool = False
 
 
 class PromptService:
@@ -82,6 +103,7 @@ class PromptService:
         *,
         effective_workdir: EffectiveWorkdir | None = None,
         session_service: SessionService | None = None,
+        server_client: OpenCodeServerClient | None = None,
     ) -> None:
         self._store = session_store
         self._factory = provider_factory
@@ -91,11 +113,19 @@ class PromptService:
         # SS-01: ensures a bot session exists BEFORE the first prompt so the
         # OpenCode ``real_id`` it returns has somewhere to be persisted.
         self._session_service = session_service
+        # Resilience: the SERVER is the source of truth for the busy state. The
+        # client is ``None`` with the CLI backend (or when reconciling is not
+        # supported), in which case in-memory state is all we have.
+        self._server_client = server_client
 
         # Per-conversation running tasks
         self._running: dict[ConversationKey, asyncio.Task[Any]] = {}
         # Per-conversation cancel flags (set by cancel() before process terminates)
         self._cancel: set[ConversationKey] = set()
+        # Last server-reported busy state per conversation (resilience). Kept
+        # in sync by ``reconcile`` so ``is_running`` reflects the server even
+        # after the local task (and its memory) is gone.
+        self._server_busy: dict[ConversationKey, bool] = {}
         # Per-conversation backend instances (F3). One conversation = one
         # backend = one process, so cancel(cid) can only ever touch that
         # conversation's process. Lifetime == the running prompt: created in
@@ -106,8 +136,171 @@ class PromptService:
     # ── Public API ──────────────────────────────────────────────────
 
     def is_running(self, conversation_id: ConversationKey) -> bool:
-        """Check if a prompt is currently executing for this chat."""
+        """Check if a prompt is executing for this chat.
+
+        Derived from the SERVER's last known state as well as the local task:
+        after a crash/restart the local task is gone, but a stale busy turn on
+        the server must still be treated as running until it is aborted.
+        """
+        return self.is_local_running(conversation_id) or self._server_busy.get(
+            conversation_id, False
+        )
+
+    def is_local_running(self, conversation_id: ConversationKey) -> bool:
+        """True only when THIS process owns a live task for the conversation."""
         return conversation_id in self._running
+
+    async def reconcile(self, conversation_id: ConversationKey) -> ReconcileResult:
+        """Reconcile the local state with the SERVER's session status.
+
+        The memory (``_running``) is lost on a crash/restart, so the server is
+        asked whether the session is still busy. When it is busy but no local
+        task owns it, the turn is an orphan: it is aborted so the next prompt is
+        not queued/frozen behind it.
+        """
+        session = await self._store.get_active_session(conversation_id)
+        if session is None or not session.real_id:
+            self._server_busy.pop(conversation_id, None)
+            return ReconcileResult()
+
+        session_id = session.real_id
+        local_running = self.is_local_running(conversation_id)
+        if self._server_client is None:
+            self._server_busy[conversation_id] = local_running
+            return ReconcileResult(session_id=session_id, busy=local_running)
+
+        workdir = await self._resolve_workdir(conversation_id)
+        try:
+            status = await self._server_client.get_session_status(session_id, directory=workdir)
+        except Exception as exc:
+            # Never let a status probe break the UI; keep the local truth.
+            logger.warning(
+                "No se pudo consultar el estado de la sesión; se usa el estado local",
+                extra={
+                    "event": "opencode_reconcile_status_failed",
+                    "session_id": session_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._server_busy[conversation_id] = local_running
+            return ReconcileResult(session_id=session_id, busy=local_running)
+
+        busy = status in _BUSY_STATUSES
+        aborted = False
+        if busy and not local_running:
+            # Orphaned turn: the UI is gone (or restarted) but the server keeps
+            # the session busy forever. Abort it so it cannot block a new send.
+            aborted = await self._abort_session(session_id, workdir)
+            busy = False
+
+        self._server_busy[conversation_id] = busy
+        logger.info(
+            "Estado de sesión reconciliado con el servidor",
+            extra={
+                "event": "opencode_session_reconciled",
+                "session_id": session_id,
+                "server_status": status,
+                "local_running": local_running,
+                "aborted_stale": aborted,
+                "busy": busy,
+            },
+        )
+        return ReconcileResult(
+            session_id=session_id,
+            server_status=status,
+            aborted_stale=aborted,
+            busy=busy,
+        )
+
+    async def abort_active(self, conversation_id: ConversationKey) -> bool:
+        """Best-effort abort of the conversation's active session on the server.
+
+        Returns True when the abort was requested. Used on disconnect so a
+        closing UI does not leave a busy turn behind.
+        """
+        if self._server_client is None:
+            return False
+        session = await self._store.get_active_session(conversation_id)
+        if session is None or not session.real_id:
+            return False
+        workdir = await self._resolve_workdir(conversation_id)
+        aborted = await self._abort_session(session.real_id, workdir)
+        if aborted:
+            self._server_busy[conversation_id] = False
+        return aborted
+
+    async def abort_on_disconnect(self, conversation_id: ConversationKey) -> bool:
+        """Handle the UI going away: stop the local turn AND clear the server.
+
+        A hard disconnect may end the event loop before the backend's scheduled
+        abort runs, so the session is aborted directly here as well. Idempotent:
+        aborting an already idle session is a harmless no-op.
+        """
+        if self.is_local_running(conversation_id):
+            self.cancel(conversation_id)
+        return await self.abort_active(conversation_id)
+
+    async def load_server_history(
+        self,
+        conversation_id: ConversationKey,
+        *,
+        limit: int = 50,
+    ) -> list[Message] | None:
+        """Fetch the REAL conversation history from the server.
+
+        ``None`` means "not available" (no server client, no active session or
+        transport failure); the caller then falls back to the DB-backed seam.
+        This is what replaces a stale partial snapshot on reconnect.
+        """
+        if self._server_client is None:
+            return None
+        session = await self._store.get_active_session(conversation_id)
+        if session is None or not session.real_id:
+            return None
+        workdir = await self._resolve_workdir(conversation_id)
+        try:
+            raw = await self._server_client.get_messages(
+                session.real_id, limit=limit, directory=workdir
+            )
+        except Exception as exc:
+            logger.warning(
+                "No se pudo cargar el historial desde el servidor",
+                extra={
+                    "event": "opencode_history_sync_failed",
+                    "session_id": session.real_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return None
+        return _messages_from_server(raw)
+
+    async def _resolve_workdir(self, conversation_id: ConversationKey) -> str | None:
+        if self._effective_workdir is None:
+            return None
+        try:
+            resolved = await self._effective_workdir.resolve(conversation_id)
+        except Exception:
+            log_exception(
+                "resilience_workdir_resolve_failed",
+                module=__name__,
+                level=logging.DEBUG,
+            )
+            return None
+        return str(resolved.path)
+
+    async def _abort_session(self, session_id: str, workdir: str | None) -> bool:
+        if self._server_client is None:
+            return False
+        try:
+            return await self._server_client.abort(session_id, directory=workdir)
+        except Exception:
+            log_exception(
+                "opencode_resilience_abort_failed",
+                module=__name__,
+                level=logging.WARNING,
+                session_id=session_id,
+            )
+            return False
 
     def cancel(self, conversation_id: ConversationKey) -> bool:
         """Request cancellation of a running prompt.
@@ -280,6 +473,9 @@ class PromptService:
         finally:
             self._running.pop(conversation_id, None)
             self._cancel.discard(conversation_id)
+            # The server reports idle (or will after the backend's abort); drop
+            # the cached busy flag so the UI does not stay on the stop button.
+            self._server_busy.pop(conversation_id, None)
             # Release this conversation's backend so the instance count stays
             # bounded by live executions (F3). The process is already gone by
             # now; the object holds no state worth keeping.
@@ -594,3 +790,51 @@ class PromptService:
                 module=__name__,
                 level=logging.DEBUG,
             )
+
+
+def _messages_from_server(raw: list[dict[str, Any]]) -> list[Message]:
+    """Map ``GET /session/{id}/message`` payloads to renderable ``Message``s.
+
+    The HTTP shape is ``[{"info": {...}, "parts": [...]}]``; only ``text`` parts
+    of a message with a known role are visible. Reasoning, tool and step parts
+    are intentionally dropped: they are not conversation turns.
+    """
+    messages: list[Message] = []
+    for item in raw:
+        info = item.get("info")
+        if not isinstance(info, dict):
+            continue
+        role = info.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+        texts: list[str] = []
+        parts: list[MessagePart] = []
+        raw_parts = item.get("parts")
+        if isinstance(raw_parts, list):
+            for raw_part in raw_parts:
+                if not isinstance(raw_part, dict) or raw_part.get("type") != "text":
+                    continue
+                text = raw_part.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text)
+                    parts.append(MessagePart(type="text", text=text))
+        joined = "\n\n".join(texts)
+        if not joined.strip():
+            continue
+        message_id = info.get("id")
+        created = info.get("time")
+        timestamp = 0
+        if isinstance(created, dict):
+            raw_created = created.get("created")
+            if isinstance(raw_created, int):
+                timestamp = raw_created
+        messages.append(
+            Message(
+                id=message_id if isinstance(message_id, str) else "",
+                role=role,
+                text=joined,
+                timestamp=timestamp,
+                parts=tuple(parts),
+            )
+        )
+    return messages

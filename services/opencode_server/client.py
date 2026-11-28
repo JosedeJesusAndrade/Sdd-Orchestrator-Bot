@@ -202,6 +202,40 @@ class OpenCodeServerClient:
         except ValueError as exc:
             raise OpenCodeUnavailableError("Respuesta inválida de /permission/{id}/reply.") from exc
 
+    async def get_session_status(
+        self,
+        session_id: str,
+        *,
+        directory: str | Path | None = None,
+    ) -> str | None:
+        """Return the SERVER's turn status for ``session_id``.
+
+        ``GET /session/status`` answers ``{sessionID: {"type": ...}}`` where the
+        type is ``"idle"``, ``"busy"`` or ``"retry"``. A session absent from the
+        map is not running, so it is reported as ``"idle"``. When the endpoint is
+        unavailable (older server: ``404``) ``None`` means "unknown" and callers
+        must not guess.
+
+        This is the authoritative source for the resilience reconcile: after a
+        crash/restart the in-memory flag is gone, but the server still knows
+        whether the abandoned turn is busy.
+        """
+        try:
+            response = await self._get("/session/status", directory=directory)
+        except OpenCodeRequestError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        data = self._json_object(response)
+        entry = data.get(session_id)
+        if entry is None:
+            return "idle"
+        if isinstance(entry, dict):
+            status_type = entry.get("type")
+            if isinstance(status_type, str) and status_type:
+                return status_type
+        return None
+
     async def abort(
         self,
         session_id: str,
