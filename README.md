@@ -1,58 +1,58 @@
 # Sdd-Orchestrator-Bot
 
-A personal **AI development gateway**: one bot that bridges your clients (Telegram and a Flet GUI) to a CLI coding agent — owning the agent lifecycle, the interactive permissions, and the session continuity so you can drive real software work from a phone.
+Una **puerta de entrada personal al desarrollo con IA**: un solo bot que conecta a tus clientes (Telegram y una interfaz gráfica en Flet) con un agente de programación por CLI. El bot se encarga del ciclo de vida del agente, de los permisos interactivos y de la continuidad de las sesiones, para que puedas dirigir trabajo real de software desde el teléfono.
 
 ![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-1114%20passing-brightgreen)
 ![mypy](https://img.shields.io/badge/mypy-strict-2A6DB2)
 ![ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)
 
-## What it is
+## Qué es
 
-Working with a coding agent normally means sitting at a terminal. This project removes that constraint: the server runs on a Linux VPS, the app lives on your phone, and a single bot is the bridge between them. It receives prompts, streams the agent's progress back, forwards permission requests for you to approve, and keeps every conversation resumable across restarts.
+Trabajar con un agente de programación normalmente significa quedarse frente a una terminal. Este proyecto elimina esa restricción: el servidor se ejecuta en un VPS Linux, la aplicación vive en tu teléfono y un solo bot es el puente entre ambos. Recibe los prompts, transmite en vivo el avance del agente, reenvía las solicitudes de permisos para que las apruebes y mantiene cada conversación reanudable tras los reinicios.
 
-The bot is deliberately **frontend-agnostic**. All business logic lives in a pure `services/` core; Telegram (`frontends/telegram/`) and the Flet app (`flet_app/`) are thin adapters that implement the core's ports. The same `build_prompt_stack()` composition root feeds both, so the two clients share one orchestration path instead of diverging. Swapping or adding a frontend — or the AI backend behind the `AIBackend` port — never touches the domain.
+El bot es deliberadamente **agnóstico del frontend**. Toda la lógica de negocio vive en un núcleo puro en `services/`; Telegram (`frontends/telegram/`) y la aplicación Flet (`flet_app/`) son adaptadores delgados que implementan los puertos del núcleo. El mismo punto de composición `build_prompt_stack()` alimenta a ambos, de modo que los dos clientes comparten una única ruta de orquestación en lugar de divergir. Cambiar o añadir un frontend —o el backend de IA detrás del puerto `AIBackend`— nunca toca el dominio.
 
-Today the implemented agent backend is **OpenCode** (HTTP server by default, CLI as a rollback). The `AIBackend` port is the seam where another CLI agent (Codex, Claude Code, …) would plug in without changing the core.
+Hoy el único backend de agente implementado y funcional es **OpenCode** (servidor HTTP por defecto, CLI como rollback). El puerto `AIBackend` es el punto de extensión previsto para **adaptadores futuros (Codex, Claude Code, …), que están en desarrollo** y todavía no forman parte de las funcionalidades disponibles.
 
-### Telegram at a glance
+### Telegram de un vistazo
 
-| Command | What it does |
+| Comando | Qué hace |
 |---|---|
-| `/status` | Active session, model, uptime |
-| `/model <alias>` | Switch model (alias or catalog id) |
-| `/session new · list · switch · delete` | Manage named sessions |
-| `/config` | Per-chat model, timeout, workdir, provider |
-| `/cancel` | Cancel the running prompt |
-| `/open <prompt>` | Send an explicit prompt |
-| `/pr <title>` | Open a GitHub PR with `gh` |
-| `/update` | `git pull` + graceful restart (exit code `42`) |
-| _(free text)_ | Prompt the active session |
+| `/status` | Sesión activa, modelo y tiempo en línea |
+| `/model <alias>` | Cambia de modelo (alias o id del catálogo) |
+| `/session new · list · switch · delete` | Gestiona sesiones con nombre |
+| `/config` | Modelo, timeout, directorio de trabajo y proveedor por chat |
+| `/cancel` | Cancela el prompt en ejecución |
+| `/open <prompt>` | Envía un prompt explícito |
+| `/pr <title>` | Abre un PR de GitHub con `gh` |
+| `/update` | `git pull` + reinicio limpio (código de salida `42`) |
+| _(texto libre)_ | Envía un prompt a la sesión activa |
 
-The full command reference lives in [DOCUMENTACION.md](DOCUMENTACION.md) §7.
+La referencia completa de comandos está en [DOCUMENTACION.md](DOCUMENTACION.md) §7.
 
-## Screenshots
+## Capturas de pantalla
 
-> Placeholders — capture these three screens from the running app and drop them into `docs/screenshots/` with these exact names.
+> Marcadores de posición: captura estas tres pantallas de la aplicación en ejecución y guárdalas en `docs/screenshots/` con exactamente estos nombres.
 
-![Chat with legible Markdown rendering](docs/screenshots/chat.png)
+![Chat con renderizado de Markdown legible](docs/screenshots/chat.png)
 
-![Session drawer with recent sessions](docs/screenshots/drawer.png)
+![Panel de sesiones con las sesiones recientes](docs/screenshots/drawer.png)
 
-![Directory explorer with CRUD and recent folders](docs/screenshots/explorer.png)
+![Explorador de directorios con CRUD y carpetas recientes](docs/screenshots/explorer.png)
 
-## Features
+## Funcionalidades
 
-- **Chat with live streaming and legible Markdown.** Telegram renders MarkdownV2 with automatic plain-text fallback and long-message splitting; the Flet UI shows an animated assistant tail. Optional voice-note transcription (Whisper) when `OPENAI_API_KEY` is set.
-- **Sessions: switch, recent, new.** Named sessions per conversation, bucketed by recency in the drawer, with per-session workdirs. State is persisted and thread-safe.
-- **Interactive permissions on both frontends.** An agent `ask` becomes inline buttons in Telegram or a modal dialog in Flet. Human waits are unbounded by default and don't consume the prompt timeout.
-- **Directory explorer.** Browse, create, rename, delete, and select workdirs from a breadcrumb view, plus the five most recent folders per conversation — guarded by a home perimeter and symlink-escape checks.
-- **Edit mode.** Rename bot-bound session titles inline from the drawer; failures keep edit mode on so you can retry.
-- **Model picker backed by the real catalog.** The picker reads the agent's live `providers` list and shows only agent-executable models, grouped by provider, with the conversation's active model marked.
-- **Server lifecycle with a supervisor.** The bot adopts a healthy `opencode serve` or spawns its own, waits on `/global/health`, and supervises it; shutdown only stops instances it owns, so the bot and GUI can share one server.
-- **Two frontends, one core.** Telegram in production and a mobile-first Flet 1.0.3 GUI, both composed from the same services and ports.
+- **Chat con streaming en vivo y Markdown legible.** Telegram renderiza MarkdownV2 con un fallback automático a texto plano y división de mensajes largos; la interfaz Flet muestra una cola animada del asistente. Transcripción opcional de notas de voz (Whisper) cuando `OPENAI_API_KEY` está definida.
+- **Sesiones: cambiar, recientes, nueva.** Sesiones con nombre por conversación, agrupadas por recencia en el panel, con directorios de trabajo por sesión. El estado se persiste y es seguro entre hilos.
+- **Permisos interactivos en ambos frontends.** Una `ask` del agente se convierte en botones en línea en Telegram o en un diálogo modal en Flet. La espera humana no tiene límite por defecto y no consume el timeout del prompt.
+- **Explorador de directorios.** Navega, crea, renombra, elimina y selecciona directorios de trabajo desde una vista de migas de pan, además de las cinco carpetas más recientes por conversación, con protección mediante un perímetro del directorio home y comprobaciones de escape por symlink.
+- **Modo de edición.** Renombra en línea los títulos de las sesiones vinculadas al bot desde el panel; si algo falla, el modo de edición permanece activo para que puedas reintentar.
+- **Selector de modelo respaldado por el catálogo real.** El selector lee la lista `providers` en vivo del agente y muestra solo los modelos que el agente puede ejecutar, agrupados por proveedor, con el modelo activo de la conversación marcado.
+- **Ciclo de vida del servidor con un supervisor.** El bot adopta un `opencode serve` saludable o lanza el suyo propio, espera en `/global/health` y lo supervisa; al apagarse solo detiene las instancias que él mismo inició, de modo que el bot y la GUI pueden compartir un mismo servidor.
+- **Dos frontends, un solo núcleo.** Telegram en producción y una GUI Flet 1.0.3 pensada primero para móvil, ambas compuestas a partir de los mismos servicios y puertos.
 
-## Architecture
+## Arquitectura
 
 ```text
   Telegram (phone) ──┐
@@ -60,52 +60,52 @@ The full command reference lives in [DOCUMENTACION.md](DOCUMENTACION.md) §7.
   Flet GUI (phone) ──┘             domain · orchestration · persistence
 ```
 
-The rule that holds the design together is a single, testable one:
+La regla que sostiene todo el diseño es una sola y verificable:
 
-> `services/` never imports `telegram`, `flet`, `frontends/`, `handlers/`, or `bot.py`.
+> `services/` nunca importa `telegram`, `flet`, `frontends/`, `handlers/` ni `bot.py`.
 
-It is not a convention — `tests/test_core_isolation_boundary.py` imports every core module in a subprocess and asserts Telegram/Flet stay out of `sys.modules`, then statically scans `services/**` for forbidden imports. A future "just import telegram in the core" fails the suite.
+No es una convención: `tests/test_core_isolation_boundary.py` importa cada módulo del núcleo en un subproceso y verifica que Telegram y Flet no entren en `sys.modules`; después inspecciona estáticamente `services/**` en busca de importaciones prohibidas. Cualquier intento futuro de «importar telegram en el núcleo» hace fallar la suite de pruebas.
 
-### Three layers
+### Tres capas
 
-| Layer | Lives in | Responsibility | May import |
+| Capa | Vive en | Responsabilidad | Puede importar |
 |---|---|---|---|
-| Core | `services/`, `core_config.py`, `formatting/`, `opencode/`, `persistence/` | Domain, orchestration, persistence, contracts | stdlib + `core_config` |
-| Frontends | `frontends/telegram/`, `flet_app/`, `handlers/`, `bot.py` | Transport, UI, auth, composition | the whole core |
-| API (future) | — | Expose the core over HTTP | the core |
+| Núcleo | `services/`, `core_config.py`, `formatting/`, `opencode/`, `persistence/` | Dominio, orquestación, persistencia y contratos | stdlib + `core_config` |
+| Frontends | `frontends/telegram/`, `flet_app/`, `handlers/`, `bot.py` | Transporte, UI, autenticación y composición | todo el núcleo |
+| API (futura) | — | Expone el núcleo sobre HTTP | el núcleo |
 
-### Ports
+### Puertos
 
-| Port | Contract | Telegram | Flet |
+| Puerto | Contrato | Telegram | Flet |
 |---|---|---|---|
 | `ChatView` + `CoreStrings` | `services/chat_view.py` | `frontends/telegram/chat_view.py` | `flet_app/flet_chat_view.py` |
 | `PermissionPort` / `PermissionPresenter` | `services/permissions.py` | `frontends/telegram/permission_presenter.py` | `flet_app/flet_permission_presenter.py` |
-| `AIBackend` | `services/ai_backend.py` | OpenCode server / CLI backend | same |
+| `AIBackend` | `services/ai_backend.py` | Backend OpenCode server / CLI | el mismo |
 | `FrontendGate` | `services/frontend_gate.py` | `TelegramGate` (allow-list) | `AllowAllGate` |
 | `ConversationKey` | `services/conversation.py` | `telegram:{chat_id}` | `flet:local` |
 
-`bot.py` and `flet_app/main.py` are the composition roots: each calls `build_prompt_stack()` and injects its own adapters. The core never knows either frontend exists.
+`bot.py` y `flet_app/main.py` son los puntos de composición: cada uno llama a `build_prompt_stack()` e inyecta sus propios adaptadores. El núcleo nunca sabe que alguno de los dos frontends existe.
 
-Design rationale, rejected alternatives, and the `sessions.json` migration are documented in:
+El razonamiento de diseño, las alternativas descartadas y la migración de `sessions.json` están documentados en:
 
 - [ADR 0001 — Frontend-agnostic core](docs/adr/0001-frontend-agnostic-core.md)
 - [ADR 0002 — Opaque conversation key](docs/adr/0002-conversation-key.md)
 
 ## Stack
 
-- **Python 3.13** (declared `requires-python >= 3.11`; CI covers 3.11–3.13)
-- **python-telegram-bot 21+** for the Telegram transport
-- **Flet 1.0.3** for the mobile-first GUI (`[gui]` extra)
-- **httpx** for the OpenCode HTTP/SSE client
-- **SQLite** for fast, read-only session reads directly from `opencode.db` (with CLI fallback)
-- **pytest + pytest-asyncio** for tests, **mypy --strict** for types, **ruff** for lint/format
-- **OpenCode** as the agent backend (server mode by default, CLI rollback)
+- **Python 3.13** (`requires-python >= 3.11` declarado; la CI cubre de 3.11 a 3.13)
+- **python-telegram-bot 21+** para el transporte de Telegram
+- **Flet 1.0.3** para la GUI pensada primero para móvil (extra `[gui]`)
+- **httpx** para el cliente HTTP/SSE de OpenCode
+- **SQLite** para lecturas de sesión rápidas y de solo lectura directamente desde `opencode.db` (con fallback a la CLI)
+- **pytest + pytest-asyncio** para las pruebas, **mypy --strict** para los tipos y **ruff** para lint/formato
+- **OpenCode** como backend del agente (modo servidor por defecto, CLI como rollback)
 
-## Quick start
+## Inicio rápido
 
-**Prerequisites:** Python 3.11+, Node.js + the OpenCode CLI (`npm install -g opencode-ai`), a Telegram bot token from [@BotFather](https://t.me/BotFather), and your chat id (run `get_chat_id.py`). The Flet app needs the `gui` extra.
+**Requisitos previos:** Python 3.11+, Node.js y la CLI de OpenCode (`npm install -g opencode-ai`), un token de bot de Telegram de [@BotFather](https://t.me/BotFather) y tu chat id (ejecuta `get_chat_id.py`). La aplicación Flet necesita el extra `gui`.
 
-Use the interpreter inside the virtualenv for every command: `.venv\Scripts\python.exe` on Windows, `.venv/bin/python` on POSIX.
+Usa el intérprete del entorno virtual en cada comando: `.venv\Scripts\python.exe` en Windows y `.venv/bin/python` en POSIX.
 
 ### POSIX
 
@@ -141,22 +141,22 @@ Copy-Item .env.example .env   # then fill in TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID
 .\.venv\Scripts\python.exe -m pytest             # test suite
 ```
 
-`pip install -e ".[dev]"` is enough if you only need the Telegram bot and the tooling; add `[gui]` for the Flet app. The server mode also requires `OPENCODE_SERVER_PASSWORD` (Basic auth); set `OPENCODE_BACKEND=cli` to run without it. Every variable is documented in [`.env.example`](.env.example) and [DOCUMENTACION.md](DOCUMENTACION.md) §3.
+`pip install -e ".[dev]"` es suficiente si solo necesitas el bot de Telegram y las herramientas; añade `[gui]` para la aplicación Flet. El modo servidor también requiere `OPENCODE_SERVER_PASSWORD` (autenticación básica); define `OPENCODE_BACKEND=cli` para ejecutar sin ella. Todas las variables están documentadas en [`.env.example`](.env.example) y en [DOCUMENTACION.md](DOCUMENTACION.md) §3.
 
-## Project status
+## Estado del proyecto
 
-- ✅ **1,114 tests passing** (2 POSIX-only tests skipped on Windows)
-- ✅ **mypy --strict:** 0 errors across 196 files
-- ✅ **ruff:** lint and format clean
-- ✅ **3 SDD changes archived:** `core-isolation` (frontend-agnostic core + ADRs), `flet-data-layer` (services, DTOs, headless controllers), `flet-ui` (chat-first mobile shell, drawer, explorer, edit mode, model picker)
+- ✅ **1,114 pruebas aprobadas** (2 pruebas solo para POSIX omitidas en Windows)
+- ✅ **mypy --strict:** 0 errores en 196 archivos
+- ✅ **ruff:** lint y formato limpios
+- ✅ **3 cambios SDD archivados:** `core-isolation` (núcleo agnóstico del frontend + ADR), `flet-data-layer` (servicios, DTO y controladores headless), `flet-ui` (shell móvil centrado en el chat, panel, explorador, modo de edición y selector de modelo)
 
-This is a **personal project** maintained by a single author. It is production-shaped (supervised server, enforced architecture boundary, strict typing) but built for one operator's workflow.
+Este es un proyecto personal mantenido por un solo autor. Tiene forma de producción (servidor supervisado, límite de arquitectura impuesto y tipado estricto), pero está hecho para el flujo de trabajo de un único operador.
 
-## Documentation
+## Documentación
 
-- [DOCUMENTACION.md](DOCUMENTACION.md) — deep technical reference: architecture, configuration, sessions, backends, permissions, tests, troubleshooting
-- [docs/adr/](docs/adr/) — Architecture Decision Records with context, alternatives, and consequences
+- [DOCUMENTACION.md](DOCUMENTACION.md) — referencia técnica detallada: arquitectura, configuración, sesiones, backends, permisos, pruebas y resolución de problemas
+- [docs/adr/](docs/adr/) — registros de decisiones de arquitectura (ADR) con contexto, alternativas y consecuencias
 
-## License
+## Licencia
 
-Personal project. No license file is included in the repository; contact the author before redistributing or using the code in production.
+Proyecto personal. El repositorio no incluye un archivo de licencia; contacta al autor antes de redistribuir el código o usarlo en producción.
