@@ -71,7 +71,9 @@ class ReconcileResult:
 
     ``busy`` is TRUE only when the SERVER reports an active turn. A stale busy
     turn (server busy, no local task) is aborted and reported as not busy, so the
-    next prompt is never queued behind an orphan.
+    next prompt is never queued behind an orphan. If that abort FAILS the server
+    is still busy, so ``busy`` stays TRUE and the caller must surface the notice
+    instead of queueing a send behind the orphan.
     """
 
     session_id: str | None = None
@@ -191,7 +193,13 @@ class PromptService:
             # Orphaned turn: the UI is gone (or restarted) but the server keeps
             # the session busy forever. Abort it so it cannot block a new send.
             aborted = await self._abort_session(session_id, workdir)
-            busy = False
+            # Only trust the abort when it SUCCEEDED. If it failed (HTTP error /
+            # 404 unsupported) the server is STILL busy: clearing the flag here
+            # would let the next send queue silently behind the orphan — the
+            # exact broken state this resilience layer exists to prevent. Keep
+            # ``busy`` TRUE so the caller shows the busy notice instead.
+            if aborted:
+                busy = False
 
         self._server_busy[conversation_id] = busy
         logger.info(

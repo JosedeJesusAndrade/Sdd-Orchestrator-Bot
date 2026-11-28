@@ -45,7 +45,7 @@ from flet_app.edit_mode import EditMode, rename_failure_notice  # noqa: E402
 from flet_app.flet_chat_view import FletChatView, render_history  # noqa: E402
 from flet_app.flet_permission_presenter import FletPermissionPresenter  # noqa: E402
 from flet_app.keys import flet_key  # noqa: E402
-from flet_app.resilience import busy_notice  # noqa: E402
+from flet_app.resilience import DisconnectGuard, busy_notice  # noqa: E402
 from flet_app.screens.chat_screen import build_chat_screen  # noqa: E402
 from flet_app.screens.explorer_screen import build_explorer_screen  # noqa: E402
 from flet_app.ui_strings import TOAST_COMING_SOON  # noqa: E402
@@ -687,27 +687,39 @@ async def main(page: ft.Page) -> None:
 
     await refresh_all()
 
+    # F5: a dropped connection is often only a transient network blip, so it
+    # must NOT abort a legitimately running turn. ``DisconnectGuard`` arms a
+    # grace timer on disconnect (cancelled by a quick reconnect) and aborts only
+    # if the grace elapses or the app is actually closed.
+    disconnect_guard = DisconnectGuard(
+        lambda: core.prompt_service.abort_on_disconnect(CONVERSATION_ID)
+    )
+
+    def on_page_disconnect(event: object = None) -> None:
+        # Transient blip (e.g. the phone loses Wi-Fi for a couple seconds):
+        # arm the grace timer instead of aborting immediately. A fast reconnect
+        # disarms it; only a real disconnect falls through to the abort.
+        page.run_task(disconnect_guard.on_disconnect)
+
     def on_page_close(event: object = None) -> None:
         # D5: the server lives always. The bot may be sharing this process, so
         # closing the GUI never calls ``manager.stop()``; it only logs.
         log_server_left_running(core.server_manager)
-        # Resilience: never leave the abandoned turn busy on the server. The
-        # local cancel stops the stream; the direct abort is the guarantee even
-        # if the event loop ends before the backend's scheduled abort runs.
-        try:
-            page.run_task(core.prompt_service.abort_on_disconnect, CONVERSATION_ID)
-        except Exception:
-            logger.debug(
-                "No se pudo programar el abort al desconectar",
-                extra={"event": "flet_disconnect_abort_schedule_failed"},
-            )
+        # Resilience: never leave the abandoned turn busy on the server. Closing
+        # the app is a real end, so abort now (the local cancel stops the stream;
+        # the direct abort is the guarantee even if the event loop ends before
+        # the backend's scheduled abort runs).
+        page.run_task(disconnect_guard.on_close)
 
     def on_page_connect(event: object = None) -> None:
-        # Fires on refresh / reconnect (NOT on first open): re-derive the state
-        # from the server and replace any stale partial with the real history.
+        # Fires on refresh / reconnect (NOT on first open). Cancel any pending
+        # disconnect abort (the blip recovered), then re-derive the state from
+        # the server and replace any stale partial with the real history. If the
+        # local turn survived, ``reconcile_and_resync`` leaves it running.
+        disconnect_guard.disarm()
         page.run_task(reconnect)
 
-    page.on_disconnect = on_page_close
+    page.on_disconnect = on_page_disconnect
     page.on_close = on_page_close
     page.on_connect = on_page_connect
 

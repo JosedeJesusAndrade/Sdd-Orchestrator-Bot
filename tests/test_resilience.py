@@ -19,7 +19,7 @@ from typing import Any
 import flet as ft
 
 from flet_app.flet_chat_view import render_history
-from flet_app.resilience import BUSY_NOTICE, busy_notice
+from flet_app.resilience import BUSY_NOTICE, DisconnectGuard, busy_notice
 from services.agent_sessions import Message
 from services.prompt_service import PromptService, ReconcileResult
 from services.session_store import SessionInfo
@@ -55,8 +55,9 @@ class _Workdir:
 class _Client:
     """Scripted ``OpenCodeServerClient`` double (only the resilience surface)."""
 
-    def __init__(self, *, status: str | None = None) -> None:
+    def __init__(self, *, status: str | None = None, abort_ok: bool = True) -> None:
         self.status = status
+        self.abort_ok = abort_ok
         self.aborted: list[str] = []
         self.status_queries: list[str] = []
         self.history: list[dict[str, Any]] = []
@@ -67,7 +68,7 @@ class _Client:
 
     async def abort(self, session_id: str, *, directory: Any = None) -> bool:
         self.aborted.append(session_id)
-        return True
+        return self.abort_ok
 
     async def get_messages(
         self, session_id: str, limit: int = 50, *, directory: Any = None
@@ -149,6 +150,23 @@ async def test_reconcile_aborts_stale_busy_turn_and_loads_real_history() -> None
     ]
 
 
+async def test_reconcile_keeps_busy_when_the_abort_fails() -> None:
+    # F2: server busy, no local task -> abort attempted but the abort FAILS.
+    # The server is still busy, so the state must stay busy (never clear it and
+    # let the next send queue behind the orphan) and the send must show a notice.
+    client = _Client(status="busy", abort_ok=False)
+    service = _service(client)
+    key = conv(1)
+
+    result = await service.reconcile(key)
+
+    assert result.aborted_stale is False
+    assert result.server_status == "busy"
+    assert client.aborted == [SID]
+    assert service.is_running(key) is True
+    assert busy_notice(result) == BUSY_NOTICE
+
+
 async def test_reconcile_keeps_a_live_local_turn_untouched() -> None:
     client = _Client(status="busy")
     service = _service(client)
@@ -199,3 +217,62 @@ def test_busy_state_yields_a_clear_notice_not_a_freeze() -> None:
     assert busy_notice(ReconcileResult(busy=True)) == BUSY_NOTICE
     assert busy_notice(ReconcileResult(busy=False)) is None
     assert "sigue trabajando" in BUSY_NOTICE
+
+
+# 5. transient blip vs real close -> only the close aborts (F5) -------------
+
+
+async def test_disconnect_blip_does_not_abort_the_turn() -> None:
+    aborts: list[int] = []
+
+    async def abort() -> bool:
+        aborts.append(1)
+        return True
+
+    guard = DisconnectGuard(abort, grace_s=0.05)
+
+    await guard.on_disconnect()
+    assert guard.armed is True
+    # A quick reconnect (the Wi-Fi came back) disarms the pending abort.
+    guard.disarm()
+    await asyncio.sleep(0.1)
+
+    assert aborts == []
+    assert guard.armed is False
+
+
+async def test_close_aborts_immediately_even_after_a_disconnect() -> None:
+    aborts: list[int] = []
+
+    async def abort() -> bool:
+        aborts.append(1)
+        return True
+
+    guard = DisconnectGuard(abort, grace_s=10.0)
+
+    await guard.on_disconnect()
+    closed = await guard.on_close()
+
+    assert closed is True
+    assert aborts == [1]
+    # The pending grace timer was cancelled: no second (orphan) abort later.
+    await asyncio.sleep(0.02)
+    assert aborts == [1]
+
+
+async def test_disconnect_without_reconnect_aborts_after_grace() -> None:
+    aborts: list[int] = []
+
+    async def abort() -> bool:
+        aborts.append(1)
+        return True
+
+    guard = DisconnectGuard(abort, grace_s=0.02)
+
+    await guard.on_disconnect()
+    assert aborts == []
+    await asyncio.sleep(0.06)
+
+    # No reconnect within the grace window -> a real disconnect -> abort.
+    assert aborts == [1]
+    assert guard.armed is False

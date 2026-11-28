@@ -1,4 +1,4 @@
-# Sdd-Orchestrator-Telegram-Bot — Documentación técnica
+# Sdd-Orchestrator-Bot — Documentación técnica
 
 Documentación del estado real del repositorio en `main`.
 Está dirigida a quien necesita mantener, extender o desplegar el bot.
